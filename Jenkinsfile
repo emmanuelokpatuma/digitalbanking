@@ -49,6 +49,10 @@ spec:
     command:
     - cat
     tty: true
+    volumeMounts:
+    - name: gcp-key
+      mountPath: /gcp-key
+      readOnly: true
   - name: gcloud
     image: google/cloud-sdk:alpine
     command:
@@ -244,7 +248,11 @@ spec:
             steps {
                 container('kubectl') {
                     sh """
-                        echo "🚀 Deploying to GKE cluster..."
+                        echo "� Authenticating with GKE cluster..."
+                        gcloud auth activate-service-account --key-file=/gcp-key/gcp-key.json
+                        gcloud container clusters get-credentials digitalbank-gke --region=us-central1 --project=charged-thought-485008-q7
+                        
+                        echo "�🚀 Deploying to GKE cluster..."
                         kubectl apply -f k8s/production-deployment.yaml
                         
                         echo "⏳ Waiting for rollout to complete..."
