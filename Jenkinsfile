@@ -9,6 +9,10 @@ metadata:
     jenkins: agent
 spec:
   serviceAccountName: jenkins
+  volumes:
+  - name: gcp-key
+    secret:
+      secretName: gcp-key
   containers:
   - name: docker
     image: docker:24
@@ -18,6 +22,10 @@ spec:
     env:
     - name: DOCKER_HOST
       value: tcp://localhost:2375
+    volumeMounts:
+    - name: gcp-key
+      mountPath: /gcp-key
+      readOnly: true
   - name: trivy
     image: aquasec/trivy:latest
     command:
@@ -155,44 +163,44 @@ spec:
             parallel {
                 stage('Scan Auth API') {
                     steps {
-                        container('trivy') {
+                        container('docker') {
                             sh """
                                 echo "🔍 Scanning auth-api image for vulnerabilities..."
-                                trivy image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
-                                trivy image --severity HIGH,CRITICAL --format json --output auth-api-trivy.json ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output auth-api-trivy.json ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
                             """
                         }
                     }
                 }
                 stage('Scan Accounts API') {
                     steps {
-                        container('trivy') {
+                        container('docker') {
                             sh """
                                 echo "🔍 Scanning accounts-api image for vulnerabilities..."
-                                trivy image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
-                                trivy image --severity HIGH,CRITICAL --format json --output accounts-api-trivy.json ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output accounts-api-trivy.json ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
                             """
                         }
                     }
                 }
                 stage('Scan Transactions API') {
                     steps {
-                        container('trivy') {
+                        container('docker') {
                             sh """
                                 echo "🔍 Scanning transactions-api image for vulnerabilities..."
-                                trivy image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
-                                trivy image --severity HIGH,CRITICAL --format json --output transactions-api-trivy.json ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output transactions-api-trivy.json ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
                             """
                         }
                     }
                 }
                 stage('Scan Frontend') {
                     steps {
-                        container('trivy') {
+                        container('docker') {
                             sh """
                                 echo "🔍 Scanning frontend image for vulnerabilities..."
-                                trivy image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
-                                trivy image --severity HIGH,CRITICAL --format json --output frontend-trivy.json ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output frontend-trivy.json ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
                             """
                         }
                     }
@@ -205,7 +213,7 @@ spec:
                 container('docker') {
                     sh """
                         echo "🚀 Authenticating with GCR using service account key..."
-                        cat /var/jenkins_home/gcp-key.json | docker login -u _json_key --password-stdin https://gcr.io
+                        cat /gcp-key/gcp-key.json | docker login -u _json_key --password-stdin https://gcr.io
                         
                         echo "📦 Pushing images to Google Container Registry..."
                         docker push ${GCR_REGISTRY}/auth-api:${BUILD_TAG}
