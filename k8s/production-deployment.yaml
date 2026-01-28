@@ -319,6 +319,7 @@ metadata:
   namespace: digitalbank-apps
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/priority: "10"
 spec:
   ingressClassName: nginx
   rules:

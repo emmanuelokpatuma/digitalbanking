@@ -94,8 +94,6 @@ spec:
         env:
         - name: JAVA_OPTS
           value: "-Djenkins.install.runSetupWizard=false -Xmx2048m"
-        - name: JENKINS_OPTS
-          value: "--prefix=/jenkins"
         resources:
           requests:
             memory: "1Gi"
@@ -105,7 +103,7 @@ spec:
             cpu: "1000m"
         livenessProbe:
           httpGet:
-            path: /jenkins/login
+            path: /login
             port: 8080
           initialDelaySeconds: 90
           periodSeconds: 10
@@ -113,7 +111,7 @@ spec:
           failureThreshold: 5
         readinessProbe:
           httpGet:
-            path: /jenkins/login
+            path: /login
             port: 8080
           initialDelaySeconds: 60
           periodSeconds: 10
@@ -130,33 +128,13 @@ metadata:
   name: jenkins
   namespace: jenkins
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
   - name: http
-    port: 8080
+    port: 80
     targetPort: 8080
   - name: jnlp
     port: 50000
     targetPort: 50000
   selector:
     app: jenkins
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: jenkins-ingress
-  namespace: jenkins
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
-spec:
-  ingressClassName: nginx
-  rules:
-  - http:
-      paths:
-      - path: /jenkins(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: jenkins
-            port:
-              number: 8080
