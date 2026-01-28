@@ -202,12 +202,10 @@ spec:
         
         stage('Push to GCR') {
             steps {
-                container('gcloud') {
+                container('docker') {
                     sh """
-                        echo "🚀 Authenticating with GCR..."
-                        gcloud auth activate-service-account --key-file=/var/jenkins_home/gcp-key.json
-                        gcloud config set project ${GCP_PROJECT}
-                        gcloud auth configure-docker --quiet
+                        echo "🚀 Authenticating with GCR using service account key..."
+                        cat /var/jenkins_home/gcp-key.json | docker login -u _json_key --password-stdin https://gcr.io
                         
                         echo "📦 Pushing images to Google Container Registry..."
                         docker push ${GCR_REGISTRY}/auth-api:${BUILD_TAG}
