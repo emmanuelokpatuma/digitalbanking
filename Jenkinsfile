@@ -277,6 +277,17 @@ spec:
                 }
             }
         }
+        
+        stage('Archive Scan Results') {
+            steps {
+                container('docker') {
+                    script {
+                        echo '📊 Archiving scan results...'
+                        archiveArtifacts artifacts: '**/*-trivy.json, **/results_*.xml', allowEmptyArchive: true
+                    }
+                }
+            }
+        }
     }
     
     post {
@@ -286,10 +297,6 @@ spec:
         }
         failure {
             echo '❌ Pipeline failed!'
-        }
-        always {
-            echo '📊 Archiving scan results...'
-            archiveArtifacts artifacts: '**/*-trivy.json, **/results_*.xml', allowEmptyArchive: true
         }
     }
 }
