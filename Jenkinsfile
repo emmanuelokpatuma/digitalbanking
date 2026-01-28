@@ -45,7 +45,7 @@ spec:
     - cat
     tty: true
   - name: kubectl
-    image: bitnami/kubectl:latest
+    image: google/cloud-sdk:alpine
     command:
     - cat
     tty: true
