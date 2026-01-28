@@ -9,6 +9,14 @@ metadata:
     jenkins: agent
 spec:
   serviceAccountName: jenkins
+  tolerations:
+  - key: "DeletionCandidateOfClusterAutoscaler"
+    operator: "Exists"
+    effect: "PreferNoSchedule"
+  - key: "ToBeDeletedByClusterAutoscaler"
+    operator: "Exists"
+    effect: "NoExecute"
+    tolerationSeconds: 3600
   volumes:
   - name: gcp-key
     secret:
