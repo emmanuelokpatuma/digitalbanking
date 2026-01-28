@@ -166,8 +166,8 @@ spec:
                         container('docker') {
                             sh """
                                 echo "🔍 Scanning auth-api image for vulnerabilities..."
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output auth-api-trivy.json ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format json --output auth-api-trivy.json ${GCR_REGISTRY}/auth-api:${BUILD_TAG} || true
                             """
                         }
                     }
@@ -177,8 +177,8 @@ spec:
                         container('docker') {
                             sh """
                                 echo "🔍 Scanning accounts-api image for vulnerabilities..."
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output accounts-api-trivy.json ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format json --output accounts-api-trivy.json ${GCR_REGISTRY}/accounts-api:${BUILD_TAG} || true
                             """
                         }
                     }
@@ -188,8 +188,8 @@ spec:
                         container('docker') {
                             sh """
                                 echo "🔍 Scanning transactions-api image for vulnerabilities..."
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output transactions-api-trivy.json ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format json --output transactions-api-trivy.json ${GCR_REGISTRY}/transactions-api:${BUILD_TAG} || true
                             """
                         }
                     }
@@ -199,8 +199,8 @@ spec:
                         container('docker') {
                             sh """
                                 echo "🔍 Scanning frontend image for vulnerabilities..."
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
-                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format json --output frontend-trivy.json ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format table ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --timeout 15m --severity HIGH,CRITICAL --format json --output frontend-trivy.json ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG} || true
                             """
                         }
                     }
