@@ -247,8 +247,9 @@ spec:
         stage('Deploy to GKE') {
             steps {
                 container('kubectl') {
-                    sh """
-                        echo "� Authenticating with GKE cluster..."
+                    sh """                        echo "📦 Installing kubectl and auth plugin..."
+                        gcloud components install kubectl gke-gcloud-auth-plugin --quiet
+                                                echo "� Authenticating with GKE cluster..."
                         gcloud auth activate-service-account --key-file=/gcp-key/gcp-key.json
                         gcloud container clusters get-credentials digitalbank-gke --region=us-central1 --project=charged-thought-485008-q7
                         
