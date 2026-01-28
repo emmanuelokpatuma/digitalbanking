@@ -203,9 +203,12 @@ spec:
         stage('Push to GCR') {
             steps {
                 container('gcloud') {
-                    sh """
-                        echo "🚀 Authenticating with GCR..."
-                        gcloud auth configure-docker --quiet
+                    withCredentials([file(credentialsId: 'gcp-service-account-key', variable: 'GCP_KEY_FILE')]) {
+                        sh """
+                            echo "🚀 Authenticating with GCR..."
+                            gcloud auth activate-service-account --key-file=\${GCP_KEY_FILE}
+                            gcloud config set project ${GCP_PROJECT}
+                            gcloud auth configure-docker --quiet
                         
                         echo "📦 Pushing images to Google Container Registry..."
                         docker push ${GCR_REGISTRY}/auth-api:${BUILD_TAG}
@@ -220,6 +223,7 @@ spec:
                         docker push ${GCR_REGISTRY}/digitalbank-frontend:${BUILD_TAG}
                         docker push ${GCR_REGISTRY}/digitalbank-frontend:latest
                     """
+                    }
                 }
             }
         }
