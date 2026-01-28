@@ -118,7 +118,9 @@ spec:
             }
             post {
                 always {
-                    junit allowEmptyResults: true, testResults: '**/results_junitxml.xml'
+                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                        junit allowEmptyResults: true, testResults: '**/results_junitxml.xml'
+                    }
                 }
             }
         }
