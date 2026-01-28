@@ -1,0 +1,206 @@
+# ELK Stack Configuration for Digital Banking Platform
+
+# Elasticsearch Configuration
+elasticsearch:
+  replicas: 3
+  minimumMasterNodes: 2
+  
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "1000m"
+      memory: "4Gi"
+  
+  volumeClaimTemplate:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 30Gi
+  
+  esJavaOpts: "-Xmx2g -Xms2g"
+  
+  persistence:
+    enabled: true
+
+# Kibana Configuration
+kibana:
+  elasticsearchHosts: "http://elasticsearch-master:9200"
+  
+  replicas: 1
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  service:
+    type: ClusterIP
+    port: 5601
+  
+  kibanaConfig:
+    kibana.yml: |
+      server.name: kibana
+      server.host: "0.0.0.0"
+      elasticsearch.hosts: [ "http://elasticsearch-master:9200" ]
+      monitoring.ui.container.elasticsearch.enabled: true
+
+# Logstash Configuration
+logstash:
+  replicas: 2
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "1Gi"
+    limits:
+      cpu: "500m"
+      memory: "2Gi"
+  
+  logstashJavaOpts: "-Xmx1g -Xms1g"
+  
+  service:
+    type: ClusterIP
+    ports:
+      - name: beats
+        port: 5044
+        protocol: TCP
+        targetPort: 5044
+      - name: http
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+  
+  logstashConfig:
+    logstash.yml: |
+      http.host: "0.0.0.0"
+      xpack.monitoring.elasticsearch.hosts: [ "http://elasticsearch-master:9200" ]
+  
+  logstashPipeline:
+    logstash.conf: |
+      input {
+        beats {
+          port => 5044
+        }
+      }
+      
+      filter {
+        # Parse JSON logs from containers
+        if [message] =~ /^\{.*\}$/ {
+          json {
+            source => "message"
+          }
+        }
+        
+        # Add Kubernetes metadata
+        if [kubernetes] {
+          mutate {
+            add_field => {
+              "k8s_namespace" => "%{[kubernetes][namespace]}"
+              "k8s_pod" => "%{[kubernetes][pod][name]}"
+              "k8s_container" => "%{[kubernetes][container][name]}"
+            }
+          }
+        }
+        
+        # Parse log levels
+        grok {
+          match => { "message" => "%{LOGLEVEL:log_level}" }
+        }
+        
+        # Add timestamp
+        date {
+          match => [ "timestamp", "ISO8601" ]
+          target => "@timestamp"
+        }
+      }
+      
+      output {
+        elasticsearch {
+          hosts => ["http://elasticsearch-master:9200"]
+          index => "digitalbank-%{[kubernetes][namespace]}-%{+YYYY.MM.dd}"
+        }
+        
+        # For debugging
+        stdout {
+          codec => rubydebug
+        }
+      }
+
+# Filebeat Configuration
+filebeat:
+  daemonset:
+    enabled: true
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  
+  filebeatConfig:
+    filebeat.yml: |
+      filebeat.inputs:
+      - type: container
+        paths:
+          - /var/log/containers/*.log
+        processors:
+        - add_kubernetes_metadata:
+            host: ${NODE_NAME}
+            matchers:
+            - logs_path:
+                logs_path: "/var/log/containers/"
+        - decode_json_fields:
+            fields: ["message"]
+            target: "json"
+            overwrite_keys: true
+      
+      # Filter to only collect logs from our namespaces
+      processors:
+      - drop_event:
+          when:
+            not:
+              or:
+                - equals:
+                    kubernetes.namespace: "digitalbank-apps"
+                - equals:
+                    kubernetes.namespace: "digitalbank-monitoring"
+                - equals:
+                    kubernetes.namespace: "argocd"
+                - equals:
+                    kubernetes.namespace: "logging"
+      
+      output.logstash:
+        hosts: ["logstash-logstash:5044"]
+      
+      # Elasticsearch output (alternative)
+      # output.elasticsearch:
+      #   hosts: ["http://elasticsearch-master:9200"]
+      #   index: "filebeat-%{[agent.version]}-%{+yyyy.MM.dd}"
+      
+      logging.level: info
+      logging.to_files: false
+      logging.to_stderr: true
+  
+  # Mount the host filesystem
+  extraVolumeMounts:
+    - name: varlog
+      mountPath: /var/log
+      readOnly: true
+    - name: varlibdockercontainers
+      mountPath: /var/lib/docker/containers
+      readOnly: true
+  
+  extraVolumes:
+    - name: varlog
+      hostPath:
+        path: /var/log
+    - name: varlibdockercontainers
+      hostPath:
+        path: /var/lib/docker/containers

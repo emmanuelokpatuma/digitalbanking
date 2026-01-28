@@ -1,0 +1,376 @@
+@Library('jenkins-shared-library') _
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: jenkins-agent
+spec:
+  serviceAccountName: jenkins
+  containers:
+  - name: docker
+    image: docker:24-dind
+    command:
+    - cat
+    tty: true
+    volumeMounts:
+    - name: docker-sock
+      mountPath: /var/run/docker.sock
+  - name: gcloud
+    image: google/cloud-sdk:latest
+    command:
+    - cat
+    tty: true
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command:
+    - cat
+    tty: true
+  - name: helm
+    image: alpine/helm:latest
+    command:
+    - cat
+    tty: true
+  - name: sonar-scanner
+    image: sonarsource/sonar-scanner-cli:latest
+    command:
+    - cat
+    tty: true
+  - name: trivy
+    image: aquasec/trivy:latest
+    command:
+    - cat
+    tty: true
+  - name: checkov
+    image: bridgecrew/checkov:latest
+    command:
+    - cat
+    tty: true
+  volumes:
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+        }
+    }
+
+    environment {
+        GCP_PROJECT_ID = credentials('gcp-project-id')
+        GCP_REGION = 'us-central1'
+        GKE_CLUSTER = 'digitalbank-gke'
+        DOCKER_REGISTRY = "gcr.io/${GCP_PROJECT_ID}"
+        SONARQUBE_URL = credentials('sonarqube-url')
+        SONARQUBE_TOKEN = credentials('sonarqube-token')
+        IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
+        SLACK_CHANNEL = '#deployments'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_COMMIT_MSG = sh(returnStdout: true, script: 'git log -1 --pretty=%B').trim()
+                    env.GIT_AUTHOR = sh(returnStdout: true, script: 'git log -1 --pretty=%an').trim()
+                }
+            }
+        }
+
+        stage('Code Quality Analysis') {
+            parallel {
+                stage('SonarQube Scan') {
+                    steps {
+                        container('sonar-scanner') {
+                            script {
+                                sh """
+                                    sonar-scanner \
+                                        -Dsonar.projectKey=digitalbank \
+                                        -Dsonar.sources=. \
+                                        -Dsonar.host.url=${SONARQUBE_URL} \
+                                        -Dsonar.login=${SONARQUBE_TOKEN} \
+                                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                                        -Dsonar.exclusions=**/node_modules/**,**/coverage/**,**/*.test.js
+                                """
+                            }
+                        }
+                    }
+                }
+
+                stage('Dependency Check') {
+                    steps {
+                        script {
+                            sh '''
+                                for service in auth-api accounts-api transactions-api digitalbank-frontend; do
+                                    cd $service
+                                    npm audit --audit-level=high || true
+                                    cd ..
+                                done
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Infrastructure Security Scan') {
+            parallel {
+                stage('Checkov - Terraform') {
+                    steps {
+                        container('checkov') {
+                            script {
+                                sh '''
+                                    checkov -d terraform/ \
+                                        --framework terraform \
+                                        --output junitxml \
+                                        --output-file-path . \
+                                        --soft-fail || true
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Checkov - Kubernetes') {
+                    steps {
+                        container('checkov') {
+                            script {
+                                sh '''
+                                    checkov -d k8s/ \
+                                        --framework kubernetes \
+                                        --output junitxml \
+                                        --output-file-path . \
+                                        --soft-fail || true
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Checkov - Helm') {
+                    steps {
+                        container('checkov') {
+                            script {
+                                sh '''
+                                    checkov -d helm/ \
+                                        --framework helm \
+                                        --output junitxml \
+                                        --output-file-path . \
+                                        --soft-fail || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                container('docker') {
+                    script {
+                        def services = ['auth-api', 'accounts-api', 'transactions-api', 'digitalbank-frontend']
+                        
+                        services.each { service ->
+                            sh """
+                                docker build -t ${DOCKER_REGISTRY}/${service}:${IMAGE_TAG} \
+                                             -t ${DOCKER_REGISTRY}/${service}:latest \
+                                             ${service}/
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Container Security Scan') {
+            steps {
+                container('trivy') {
+                    script {
+                        def services = ['auth-api', 'accounts-api', 'transactions-api', 'digitalbank-frontend']
+                        
+                        services.each { service ->
+                            sh """
+                                trivy image \
+                                    --severity HIGH,CRITICAL \
+                                    --format json \
+                                    --output ${service}-trivy-report.json \
+                                    ${DOCKER_REGISTRY}/${service}:${IMAGE_TAG}
+                                
+                                trivy image \
+                                    --severity HIGH,CRITICAL \
+                                    --exit-code 1 \
+                                    ${DOCKER_REGISTRY}/${service}:${IMAGE_TAG} || true
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Push Images to GCR') {
+            steps {
+                container('gcloud') {
+                    script {
+                        sh """
+                            gcloud auth configure-docker
+                            
+                            for service in auth-api accounts-api transactions-api digitalbank-frontend; do
+                                docker push ${DOCKER_REGISTRY}/\${service}:${IMAGE_TAG}
+                                docker push ${DOCKER_REGISTRY}/\${service}:latest
+                            done
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Update Helm Values') {
+            steps {
+                script {
+                    sh """
+                        sed -i 's/tag: .*/tag: ${IMAGE_TAG}/' helm/digitalbank/values.yaml
+                        
+                        git config user.email "jenkins@digitalbank.com"
+                        git config user.name "Jenkins CI"
+                        git add helm/digitalbank/values.yaml
+                        git commit -m "Update image tag to ${IMAGE_TAG}" || true
+                        git push origin main || true
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        sh """
+                            gcloud container clusters get-credentials ${GKE_CLUSTER} \
+                                --region ${GCP_REGION} \
+                                --project ${GCP_PROJECT_ID}
+                            
+                            kubectl create namespace digitalbank-staging --dry-run=client -o yaml | kubectl apply -f -
+                            
+                            helm upgrade --install digitalbank \
+                                ./helm/digitalbank \
+                                --namespace digitalbank-staging \
+                                --set global.environment=staging \
+                                --set global.imageTag=${IMAGE_TAG} \
+                                --wait \
+                                --timeout 10m
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Run Integration Tests') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    sh """
+                        # Run integration tests against staging
+                        npm run test:integration || true
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    timeout(time: 15, unit: 'MINUTES') {
+                        input message: 'Deploy to Production?', ok: 'Deploy'
+                    }
+                }
+                
+                container('kubectl') {
+                    script {
+                        sh """
+                            gcloud container clusters get-credentials ${GKE_CLUSTER} \
+                                --region ${GCP_REGION} \
+                                --project ${GCP_PROJECT_ID}
+                            
+                            # ArgoCD will handle the deployment
+                            # This just updates the image tags
+                            kubectl set image deployment/auth-api \
+                                auth-api=${DOCKER_REGISTRY}/auth-api:${IMAGE_TAG} \
+                                -n digitalbank-prod
+                            
+                            kubectl set image deployment/accounts-api \
+                                accounts-api=${DOCKER_REGISTRY}/accounts-api:${IMAGE_TAG} \
+                                -n digitalbank-prod
+                            
+                            kubectl set image deployment/transactions-api \
+                                transactions-api=${DOCKER_REGISTRY}/transactions-api:${IMAGE_TAG} \
+                                -n digitalbank-prod
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            when {
+                branch 'main'
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        sh """
+                            kubectl rollout status deployment/auth-api -n digitalbank-prod --timeout=5m
+                            kubectl rollout status deployment/accounts-api -n digitalbank-prod --timeout=5m
+                            kubectl rollout status deployment/transactions-api -n digitalbank-prod --timeout=5m
+                            
+                            # Run smoke tests
+                            kubectl run smoke-test --image=curlimages/curl:latest --rm -i --restart=Never -- \
+                                curl -f http://auth-api.digitalbank-prod.svc.cluster.local:3001/health
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline succeeded!'
+            // slackSend(channel: env.SLACK_CHANNEL, color: 'good', 
+            //     message: "✅ Build ${env.BUILD_NUMBER} succeeded for ${env.GIT_BRANCH}")
+        }
+        failure {
+            echo 'Pipeline failed!'
+            // slackSend(channel: env.SLACK_CHANNEL, color: 'danger', 
+            //     message: "❌ Build ${env.BUILD_NUMBER} failed for ${env.GIT_BRANCH}")
+        }
+        always {
+            // Archive reports
+            archiveArtifacts artifacts: '**/trivy-report.json,**/results*.xml', allowEmptyArchive: true
+            
+            // Publish test results
+            junit testResults: '**/results*.xml', allowEmptyResults: true
+            
+            // Clean workspace
+            cleanWs()
+        }
+    }
+}

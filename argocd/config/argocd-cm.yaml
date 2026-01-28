@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  # Enable exec for debugging
+  exec.enabled: "true"
+  
+  # Timeout settings
+  timeout.reconciliation: 180s
+  timeout.hard.reconciliation: 0
+  
+  # Repository credentials
+  repositories: |
+    - url: https://github.com/your-org/digitalbanking.git
+      usernameSecret:
+        name: repo-secret
+        key: username
+      passwordSecret:
+        name: repo-secret
+        key: password
+  
+  # Resource exclusions
+  resource.exclusions: |
+    - apiGroups:
+      - cilium.io
+      kinds:
+      - CiliumIdentity
+      clusters:
+      - "*"
+  
+  # SSO Configuration (Google)
+  dex.config: |
+    connectors:
+    - type: google
+      id: google
+      name: Google
+      config:
+        clientID: $GOOGLE_CLIENT_ID
+        clientSecret: $GOOGLE_CLIENT_SECRET
+        redirectURI: https://argocd.digitalbank.example.com/api/dex/callback
+        hostedDomains:
+        - digitalbank.example.com

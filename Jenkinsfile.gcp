@@ -1,0 +1,249 @@
+@Library('mySharedLibrary') _
+
+def buildTag = ''
+
+pipeline {
+    agent { label 'build-agent' }
+
+    parameters {
+        choice(name: 'SERVICE', choices: ['all', 'auth-api', 'accounts-api', 'transactions-api', 'digitalbank-frontend'], description: 'Select service to deploy')
+        choice(name: 'ENVIRONMENT', choices: ['staging', 'production'], description: 'Deployment environment')
+        string(name: 'BRANCH', defaultValue: 'main', description: 'Git branch to build')
+        booleanParam(name: 'SKIP_TESTS', defaultValue: false, description: 'Skip integration tests')
+        booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy to Kubernetes')
+    }
+
+    environment {
+        // GCP Configuration
+        GCP_PROJECT_ID = credentials('gcp-project-id')  // charged-thought-485008-q7
+        GCP_REGION = 'us-central1'
+        GCP_ZONE = 'us-central1-a'
+        GKE_CLUSTER_NAME = 'digitalbank-cluster'
+        
+        // Container Registry
+        GCR_REGISTRY = "gcr.io/${GCP_PROJECT_ID}"
+        
+        // SonarQube Configuration
+        SONAR_HOST_URL = 'http://sonarqube.digitalbank.svc.cluster.local:9000'
+        SONAR_PROJECT_KEY = 'digital-banking-platform'
+        
+        // Kubernetes Configuration
+        KUBE_NAMESPACE = "${params.ENVIRONMENT}"
+        KUBE_CONTEXT = "gke_${GCP_PROJECT_ID}_${GCP_REGION}_${GKE_CLUSTER_NAME}"
+        HELM_RELEASE_NAME = 'digitalbank'
+    }
+
+    stages {
+        stage('Generate Tag') {
+            steps {
+                script {
+                    buildTag = generateTag()
+                    currentBuild.displayName = "${buildTag}-${params.SERVICE}"
+                    echo "🏷️ Build Tag: ${buildTag}"
+                }
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git url: 'https://github.com/yourusername/digitalbanking.git', branch: "${params.BRANCH}"  // Update with your actual repo
+                script {
+                    sh 'git rev-parse --short HEAD > .git/commit-id'
+                    env.GIT_COMMIT_SHORT = readFile('.git/commit-id').trim()
+                    echo "Git Commit: ${env.GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+
+        stage('SonarQube Scan') {
+            steps {
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_AUTH_TOKEN')]) {
+                    withSonarQubeEnv('SonarQube') {
+                        script {
+                            def services = getServiceList()
+                            
+                            services.each { service ->
+                                echo "📊 Running SonarQube scan for ${service}"
+                                dir(service) {
+                                    sh """
+                                        sonar-scanner \
+                                          -Dsonar.projectKey=${SONAR_PROJECT_KEY}-${service} \
+                                          -Dsonar.sources=src \
+                                          -Dsonar.host.url=${SONAR_HOST_URL} \
+                                          -Dsonar.login=${SONAR_AUTH_TOKEN} \
+                                          -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                                          -Dsonar.exclusions=**/node_modules/**,**/coverage/**
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    buildDocker(buildTag)
+                }
+            }
+        }
+
+        stage('Container Security Scan') {
+            steps {
+                script {
+                    scanContainers(buildTag)
+                }
+            }
+        }
+
+        stage('Authenticate to GCP') {
+            steps {
+                withCredentials([
+                    file(credentialsId: 'gcp-service-account-key', variable: 'GCP_KEY_FILE')
+                ]) {
+                    sh """
+                        gcloud auth activate-service-account --key-file=\$GCP_KEY_FILE
+                        gcloud config set project ${GCP_PROJECT_ID}
+                        gcloud config set compute/region ${GCP_REGION}
+                        gcloud config set compute/zone ${GCP_ZONE}
+                        
+                        echo "✅ Authenticated to GCP Project: ${GCP_PROJECT_ID}"
+                    """
+                }
+            }
+        }
+
+        stage('Push to Google Container Registry') {
+            steps {
+                script {
+                    pushDocker(buildTag)
+                }
+            }
+        }
+
+        stage('Get GKE Credentials') {
+            steps {
+                sh """
+                    gcloud container clusters get-credentials ${GKE_CLUSTER_NAME} \
+                      --region ${GCP_REGION} \
+                      --project ${GCP_PROJECT_ID}
+                    
+                    kubectl config current-context
+                    kubectl get namespace
+                """
+            }
+        }
+
+        stage('Switch Kubernetes Context') {
+            steps {
+                sh """
+                    kubectl config use-context \$KUBE_CONTEXT
+                    echo "Switched to context: \$KUBE_CONTEXT"
+                """
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                expression { params.ENVIRONMENT == 'staging' && params.DEPLOY }
+            }
+            steps {
+                script {
+                    dir('helm-charts') {
+                        git url: 'https://github.com/yourusername/digitalbanking.git', branch: 'main'
+                    }
+                    deployGKE(buildTag, 'staging')
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            when {
+                expression { !params.SKIP_TESTS && params.DEPLOY }
+            }
+            steps {
+                script {
+                    runIntegrationTests()
+                }
+            }
+        }
+
+        stage('Approve Production Deployment') {
+            when {
+                expression { params.ENVIRONMENT == 'production' && params.DEPLOY }
+            }
+            steps {
+                script {
+                    input message: "🚀 Deploy to Production?", 
+                          ok: 'Deploy', 
+                          submitter: 'admin,devops-team'
+                }
+            }
+        }
+
+        stage('Deploy to Production') {
+            when {
+                expression { params.ENVIRONMENT == 'production' && params.DEPLOY }
+            }
+            steps {
+                script {
+                    dir('helm-charts') {
+                        git url: 'https://github.com/yourusername/digitalbanking.git', branch: 'main'
+                    }
+                    deployGKE(buildTag, 'production')
+                }
+            }
+        }
+
+        stage('Deployment Verification') {
+            when {
+                expression { params.DEPLOY }
+            }
+            steps {
+                script {
+                    verifyDeployment()
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: '**/trivy-*-report.json,**/npm-audit-*.json,**/sonar-report.json', 
+                             allowEmptyArchive: true
+        }
+        
+        success {
+            echo "✅ Pipeline completed successfully! Build Tag: ${buildTag}"
+        }
+        
+        failure {
+            echo "❌ Pipeline failed!"
+            sh """
+                kubectl get pods -n ${KUBE_NAMESPACE} || true
+                kubectl describe pods -n ${KUBE_NAMESPACE} || true
+            """
+        }
+        
+        cleanup {
+            cleanWs()
+        }
+    }
+}
+
+// Helper function to get service list
+def getServiceList() {
+    return params.SERVICE == 'all' ? 
+        ['auth-api', 'accounts-api', 'transactions-api', 'digitalbank-frontend'] : 
+        [params.SERVICE]
+}

@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-config
+  namespace: logging
+data:
+  elasticsearch.yml: |
+    cluster.name: digitalbank-logs
+    network.host: 0.0.0.0
+    discovery.type: single-node
+    xpack.security.enabled: false
+    xpack.monitoring.enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: logging
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    path.config: /usr/share/logstash/pipeline
+  
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+      tcp {
+        port => 5000
+        codec => json
+      }
+    }
+
+    filter {
+      if [kubernetes] {
+        mutate {
+          add_field => {
+            "cluster" => "digitalbank-gke"
+          }
+        }
+      }
+
+      if [log] =~ /ERROR|FATAL/ {
+        mutate {
+          add_tag => ["error"]
+        }
+      }
+
+      grok {
+        match => {
+          "message" => "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:log_level} %{GREEDYDATA:log_message}"
+        }
+      }
+
+      date {
+        match => ["timestamp", "ISO8601"]
+        target => "@timestamp"
+      }
+
+      if [service] == "auth-api" {
+        grok {
+          match => {
+            "message" => "Login attempt for user: %{USERNAME:username}"
+          }
+          tag_on_failure => []
+        }
+      }
+
+      if [service] == "transactions-api" {
+        grok {
+          match => {
+            "message" => "Transaction %{WORD:transaction_id} amount: %{NUMBER:amount}"
+          }
+          tag_on_failure => []
+        }
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["elasticsearch:9200"]
+        index => "digitalbank-%{+YYYY.MM.dd}"
+      }
+      
+      if "error" in [tags] {
+        elasticsearch {
+          hosts => ["elasticsearch:9200"]
+          index => "digitalbank-errors-%{+YYYY.MM.dd}"
+        }
+      }
+
+      stdout {
+        codec => rubydebug
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-config
+  namespace: logging
+data:
+  kibana.yml: |
+    server.name: kibana
+    server.host: "0.0.0.0"
+    elasticsearch.hosts: ["http://elasticsearch:9200"]
+    monitoring.ui.container.elasticsearch.enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  namespace: logging
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: container
+        paths:
+          - /var/log/containers/*.log
+        processors:
+          - add_kubernetes_metadata:
+              host: ${NODE_NAME}
+              matchers:
+                - logs_path:
+                    logs_path: "/var/log/containers/"
+
+    processors:
+      - add_cloud_metadata: ~
+      - add_host_metadata: ~
+      - add_docker_metadata: ~
+
+    output.logstash:
+      hosts: ["logstash:5044"]
+
+    logging.level: info
+    logging.to_files: true
+    logging.files:
+      path: /var/log/filebeat
+      name: filebeat
+      keepfiles: 7
+      permissions: 0644

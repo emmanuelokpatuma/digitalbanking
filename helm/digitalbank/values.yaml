@@ -1,0 +1,36 @@
+global:
+  domain: digitalbank.example.com
+  gcpProjectId: charged-thought-485008-q7
+  gcpRegion: us-central1
+
+auth-api:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: gcr.io/charged-thought-485008-q7/auth-api
+    tag: latest
+
+accounts-api:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: gcr.io/charged-thought-485008-q7/accounts-api
+    tag: latest
+
+transactions-api:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: gcr.io/charged-thought-485008-q7/transactions-api
+    tag: latest
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: changeme
+
+ingress-nginx:
+  enabled: true
+  controller:
+    service:
+      type: LoadBalancer

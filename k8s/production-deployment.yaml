@@ -1,0 +1,333 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: digitalbank-apps
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: digitalbank-monitoring
+---
+# Auth API Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-api
+  namespace: digitalbank-apps
+  labels:
+    app: auth-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-api
+  template:
+    metadata:
+      labels:
+        app: auth-api
+        tier: backend
+    spec:
+      containers:
+      - name: auth-api
+        image: gcr.io/charged-thought-485008-q7/auth-api:latest
+        ports:
+        - containerPort: 3001
+          name: http
+        env:
+        - name: PORT
+          value: "3001"
+        - name: NODE_ENV
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-urls
+              key: auth-db-url
+        - name: JWT_SECRET
+          value: "prod-jwt-secret-change-me-12345"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-api
+  namespace: digitalbank-apps
+spec:
+  type: ClusterIP
+  selector:
+    app: auth-api
+  ports:
+  - name: http
+    port: 3001
+    targetPort: 3001
+---
+# Accounts API Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: accounts-api
+  namespace: digitalbank-apps
+  labels:
+    app: accounts-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: accounts-api
+  template:
+    metadata:
+      labels:
+        app: accounts-api
+        tier: backend
+    spec:
+      containers:
+      - name: accounts-api
+        image: gcr.io/charged-thought-485008-q7/accounts-api:latest
+        ports:
+        - containerPort: 3002
+          name: http
+        env:
+        - name: PORT
+          value: "3002"
+        - name: NODE_ENV
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-urls
+              key: accounts-db-url
+        - name: AUTH_API_URL
+          value: "http://auth-api:3001"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: accounts-api
+  namespace: digitalbank-apps
+spec:
+  type: ClusterIP
+  selector:
+    app: accounts-api
+  ports:
+  - name: http
+    port: 3002
+    targetPort: 3002
+---
+# Transactions API Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transactions-api
+  namespace: digitalbank-apps
+  labels:
+    app: transactions-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: transactions-api
+  template:
+    metadata:
+      labels:
+        app: transactions-api
+        tier: backend
+    spec:
+      containers:
+      - name: transactions-api
+        image: gcr.io/charged-thought-485008-q7/transactions-api:latest
+        ports:
+        - containerPort: 3003
+          name: http
+        env:
+        - name: PORT
+          value: "3003"
+        - name: NODE_ENV
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-urls
+              key: transactions-db-url
+        - name: AUTH_API_URL
+          value: "http://auth-api:3001"
+        - name: ACCOUNTS_API_URL
+          value: "http://accounts-api:3002"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3003
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3003
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transactions-api
+  namespace: digitalbank-apps
+spec:
+  type: ClusterIP
+  selector:
+    app: transactions-api
+  ports:
+  - name: http
+    port: 3003
+    targetPort: 3003
+---
+# Frontend Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: digitalbank-frontend
+  namespace: digitalbank-apps
+  labels:
+    app: digitalbank-frontend
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: digitalbank-frontend
+  template:
+    metadata:
+      labels:
+        app: digitalbank-frontend
+        tier: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: gcr.io/charged-thought-485008-q7/digitalbank-frontend:latest
+        ports:
+        - containerPort: 80
+          name: http
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: digitalbank-frontend
+  namespace: digitalbank-apps
+spec:
+  type: ClusterIP
+  selector:
+    app: digitalbank-frontend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+---
+# Ingress for APIs with path rewriting
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: digitalbank-api-ingress
+  namespace: digitalbank-apps
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /api/auth(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: auth-api
+            port:
+              number: 3001
+      - path: /api/accounts(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: accounts-api
+            port:
+              number: 3002
+      - path: /api/transactions(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: transactions-api
+            port:
+              number: 3003
+---
+# Ingress for frontend (no rewriting)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: digitalbank-frontend-ingress
+  namespace: digitalbank-apps
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: digitalbank-frontend
+            port:
+              number: 80

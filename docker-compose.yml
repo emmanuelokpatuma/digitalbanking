@@ -1,0 +1,157 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Databases
+  auth-db:
+    image: postgres:15-alpine
+    container_name: auth-db
+    environment:
+      POSTGRES_DB: authdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - auth-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - digitalbank-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  accounts-db:
+    image: postgres:15-alpine
+    container_name: accounts-db
+    environment:
+      POSTGRES_DB: accountsdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - accounts-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - digitalbank-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  transactions-db:
+    image: postgres:15-alpine
+    container_name: transactions-db
+    environment:
+      POSTGRES_DB: transactionsdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - transactions-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    networks:
+      - digitalbank-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Auth API Service
+  auth-api:
+    build:
+      context: ./auth-api
+      dockerfile: Dockerfile
+    container_name: auth-api
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:password@auth-db:5432/authdb
+      JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
+      JWT_EXPIRES_IN: 24h
+      NODE_ENV: development
+    ports:
+      - "3001:3001"
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    networks:
+      - digitalbank-network
+    restart: unless-stopped
+
+  # Accounts API Service
+  accounts-api:
+    build:
+      context: ./accounts-api
+      dockerfile: Dockerfile
+    container_name: accounts-api
+    environment:
+      PORT: 3002
+      DATABASE_URL: postgresql://postgres:password@accounts-db:5432/accountsdb
+      AUTH_API_URL: http://auth-api:3001
+      NODE_ENV: development
+    ports:
+      - "3002:3002"
+    depends_on:
+      accounts-db:
+        condition: service_healthy
+      auth-api:
+        condition: service_started
+    networks:
+      - digitalbank-network
+    restart: unless-stopped
+
+  # Transactions API Service
+  transactions-api:
+    build:
+      context: ./transactions-api
+      dockerfile: Dockerfile
+    container_name: transactions-api
+    environment:
+      PORT: 3003
+      DATABASE_URL: postgresql://postgres:password@transactions-db:5432/transactionsdb
+      AUTH_API_URL: http://auth-api:3001
+      ACCOUNTS_API_URL: http://accounts-api:3002
+      NODE_ENV: development
+    ports:
+      - "3003:3003"
+    depends_on:
+      transactions-db:
+        condition: service_healthy
+      auth-api:
+        condition: service_started
+      accounts-api:
+        condition: service_started
+    networks:
+      - digitalbank-network
+    restart: unless-stopped
+
+  # Frontend Application
+  digitalbank-frontend:
+    build:
+      context: ./digitalbank-frontend
+      dockerfile: Dockerfile
+    container_name: digitalbank-frontend
+    environment:
+      VITE_AUTH_API_URL: http://localhost:3001
+      VITE_ACCOUNTS_API_URL: http://localhost:3002
+      VITE_TRANSACTIONS_API_URL: http://localhost:3003
+    ports:
+      - "3000:80"
+    depends_on:
+      - auth-api
+      - accounts-api
+      - transactions-api
+    networks:
+      - digitalbank-network
+    restart: unless-stopped
+
+networks:
+  digitalbank-network:
+    driver: bridge
+
+volumes:
+  auth-data:
+  accounts-data:
+  transactions-data:

@@ -1,0 +1,10 @@
+kubernetes:4253.v7700d91739e5
+workflow-aggregator:596.v8c21c963d92d
+git:5.2.2
+configuration-as-code:1775.v810dc950b_514
+docker-workflow:572.v950f58993843
+kubernetes-cli:1.12.1
+pipeline-stage-view:2.34
+blueocean:1.27.11
+google-container-registry-auth:0.3
+google-kubernetes-engine:0.10.1
