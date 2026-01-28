@@ -21,6 +21,8 @@ spec:
   - name: gcp-key
     secret:
       secretName: gcp-key
+  - name: trivy-cache
+    emptyDir: {}
   containers:
   - name: docker
     image: docker:24
@@ -39,6 +41,9 @@ spec:
     command:
     - cat
     tty: true
+    volumeMounts:
+    - name: trivy-cache
+      mountPath: /root/.cache/trivy
   - name: checkov
     image: bridgecrew/checkov:latest
     command:
@@ -167,6 +172,18 @@ spec:
                             }
                         }
                     }
+                }
+            }
+        }
+        
+        stage('Trivy DB Download') {
+            steps {
+                container('trivy') {
+                    sh """
+                        echo "📥 Downloading Trivy vulnerability database..."
+                        trivy image --download-db-only
+                        echo "✅ Trivy DB downloaded successfully!"
+                    """
                 }
             }
         }
