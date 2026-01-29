@@ -7,17 +7,22 @@
   "variable": [
     {
       "key": "auth_url",
-      "value": "http://localhost:3001",
+      "value": "http://34.31.22.16/api/auth",
       "type": "string"
     },
     {
       "key": "accounts_url",
-      "value": "http://localhost:3002",
+      "value": "http://34.31.22.16/api/accounts",
       "type": "string"
     },
     {
       "key": "transactions_url",
-      "value": "http://localhost:3003",
+      "value": "http://34.31.22.16/api/transactions",
+      "type": "string"
+    },
+    {
+      "key": "frontend_url",
+      "value": "http://34.31.22.16",
       "type": "string"
     },
     {
