@@ -35,7 +35,440 @@
 
 ---
 
-## 🏗️ Architecture
+## � Understanding the Architecture - For Beginners
+
+### Why This Design? The Big Picture
+
+**Question: Why did we build it this way?**
+
+Think of this platform like a restaurant:
+- **Frontend (React)** = The menu customers see
+- **APIs (Node.js)** = The kitchen where orders are processed
+- **Databases (PostgreSQL)** = The refrigerators storing ingredients
+- **Kubernetes (GKE)** = The restaurant building with multiple rooms
+- **Load Balancer (Nginx)** = The host who seats customers at the right table
+- **Monitoring (Grafana)** = The manager watching everything runs smoothly
+
+### Key Architectural Decisions Explained
+
+#### 1️⃣ **Why Microservices Instead of One Big Application?**
+
+**What we built:**
+- 3 separate services: Auth, Accounts, Transactions
+- Each service has its own codebase and database
+
+**Why this choice:**
+- ✅ **Independence**: Auth team can deploy without affecting Accounts team
+- ✅ **Scalability**: If transactions are slow, scale only that service (not everything)
+- ✅ **Fault isolation**: If Accounts crashes, Auth still works for login
+- ✅ **Technology flexibility**: Could use Python for one service, Node.js for another
+
+**Alternative we rejected:**
+- ❌ **Monolith** (one giant application): Simpler to build initially but harder to scale and maintain. One bug could crash everything.
+
+**Real-world example:**
+```
+Before (Monolith): 
+- 1 million users → Need 10 servers for entire app
+- Payment processing slow → Have to scale everything (expensive!)
+
+After (Microservices):
+- 1 million users → Auth needs 2 servers, Accounts needs 3, Transactions needs 5
+- Payment slow → Scale only Transactions service (cheaper!)
+```
+
+#### 2️⃣ **Why Separate Databases Per Service?**
+
+**What we built:**
+- authdb: Stores only users and passwords
+- accountsdb: Stores only bank accounts
+- transactionsdb: Stores only payment records
+
+**Why this choice:**
+- ✅ **Data isolation**: Accounts service can't accidentally delete users
+- ✅ **Independent scaling**: Transactions DB can be larger/faster than Auth DB
+- ✅ **Security**: If one DB is breached, others are still safe
+- ✅ **Microservice pattern**: Each service owns its data completely
+
+**Alternative we rejected:**
+- ❌ **Single shared database**: All services touching same DB creates bottlenecks and tight coupling. Schema changes affect everyone.
+
+**How they connect:**
+```
+User flow: Register → Create Account → Make Transaction
+
+1. POST /api/auth/register
+   → Auth API checks authdb
+   → Returns JWT token with user_id
+   
+2. POST /api/accounts (with token)
+   → Accounts API verifies token with Auth API
+   → Creates account in accountsdb using user_id
+   
+3. POST /api/transactions (with token)
+   → Transactions API verifies token
+   → Checks account_id exists via Accounts API
+   → Records transaction in transactionsdb
+```
+
+#### 3️⃣ **Why Kubernetes (GKE) Instead of Virtual Machines?**
+
+**What we built:**
+- GKE cluster with 3 nodes
+- Applications run in containers (Docker)
+- Kubernetes manages container lifecycle
+
+**Why this choice:**
+- ✅ **Auto-healing**: If a container crashes, Kubernetes restarts it automatically
+- ✅ **Easy scaling**: `kubectl scale deployment auth-api --replicas=5` (done!)
+- ✅ **Resource efficiency**: Multiple containers per node (better than 1 VM per app)
+- ✅ **Portability**: Same containers run on dev laptop, test, and production
+- ✅ **Industry standard**: Modern cloud-native approach
+
+**Alternative we rejected:**
+- ❌ **VMs**: Each app needs its own VM (expensive, slow to start, wastes resources)
+- ❌ **Serverless (Cloud Run)**: Great for simple apps but doesn't give us Kubernetes control/monitoring we need
+
+**Understanding the hierarchy:**
+```
+Google Cloud Platform (GCP)
+  └── GKE Cluster: digitalbank-gke
+       ├── Node 1 (Physical VM in us-central1-a)
+       │    ├── Pod: auth-api (container running Node.js)
+       │    ├── Pod: prometheus-server (container running Prometheus)
+       │    └── Pod: filebeat (container collecting logs)
+       │
+       ├── Node 2 (Physical VM in us-central1-b)
+       │    ├── Pod: accounts-api
+       │    └── Pod: grafana
+       │
+       └── Node 3 (Physical VM in us-central1-c)
+            ├── Pod: transactions-api
+            └── Pod: kibana
+```
+
+**Why 3 nodes across 3 zones?**
+- Zone a goes down → Nodes in zone b and c still run (high availability)
+- Even distribution → No single point of failure
+- Cost-optimized: 3 nodes enough for demo (originally had 9 for production HA)
+
+#### 4️⃣ **Why Private Networking with Cloud NAT?**
+
+**What we built:**
+- Nodes have NO public IPs (private: 10.0.0.x)
+- Pods have private IPs (10.1.0.x)
+- Cloud NAT provides internet access
+
+**Why this choice:**
+- ✅ **Security**: Hackers can't directly access nodes (no public IP to attack)
+- ✅ **DDoS protection**: All traffic routes through Load Balancers with protection
+- ✅ **Compliance**: Many regulations require private infrastructure
+- ✅ **Cost**: Public IPs cost money, private IPs are free
+
+**How it works:**
+```
+Scenario 1: User visits website
+Internet User → Load Balancer (34.31.22.16) 
+            → Ingress Controller (pod in cluster)
+            → Frontend Pod (10.1.3.5)
+            
+Scenario 2: Pod needs to download something
+Frontend Pod (10.1.3.5) → Cloud NAT (acts as proxy)
+                       → Internet → Downloads npm packages
+                       
+✅ Inbound: Only through controlled Load Balancer
+✅ Outbound: Through Cloud NAT (allows installing packages)
+❌ Direct access to pods: BLOCKED
+```
+
+**Alternative we rejected:**
+- ❌ **Public IPs on nodes**: Easier to set up but HUGE security risk. Every node exposed to internet attacks.
+
+#### 5️⃣ **Why Nginx Ingress Instead of Multiple LoadBalancers?**
+
+**What we chose:**
+- 1 LoadBalancer (34.31.22.16) for ALL application traffic
+- Routes based on URL path:
+  - `/` → Frontend
+  - `/api/auth` → Auth API
+  - `/api/accounts` → Accounts API
+  - `/api/transactions` → Transactions API
+
+**Why this choice:**
+- ✅ **Cost savings**: 1 LoadBalancer ($18/mo) vs 4 LoadBalancers ($72/mo)
+- ✅ **Single entry point**: Easier SSL certificate management
+- ✅ **Centralized routing**: One place to configure all traffic rules
+- ✅ **Performance**: Nginx is extremely fast at routing
+
+**How URL routing works:**
+```
+User Request: http://34.31.22.16/api/auth/login
+
+1. Hits LoadBalancer (34.31.22.16)
+2. LoadBalancer forwards to Nginx Ingress Controller (pod)
+3. Ingress checks path: /api/auth
+4. Ingress routes to auth-api service (10.2.171.160:3001)
+5. Service selects healthy auth-api pod (10.1.3.14)
+6. Pod processes login request
+7. Response travels back same path
+
+All in milliseconds!
+```
+
+**Why monitoring still has separate LoadBalancers:**
+- Grafana, Prometheus, Kibana have their own IPs for easy access
+- Not user-facing, so less concern about cost
+- Want independent access (don't want monitoring to fail if main Ingress fails)
+
+#### 6️⃣ **Why GitOps with ArgoCD?**
+
+**What we built:**
+- Git repository as single source of truth
+- ArgoCD watches Git, automatically deploys changes
+- No manual `kubectl apply` commands
+
+**Why this choice:**
+- ✅ **Audit trail**: Every change in Git history (who changed what, when, why)
+- ✅ **Easy rollback**: `git revert` to undo bad deployment
+- ✅ **Declarative**: Describe WHAT you want, not HOW to do it
+- ✅ **Consistency**: Dev, staging, prod all deploy the same way
+- ✅ **Team collaboration**: Review changes via Pull Requests before deployment
+
+**The workflow:**
+```
+Developer → Edits k8s/production-deployment.yaml
+         → Commits to Git
+         → Pushes to GitHub
+         
+ArgoCD (running in cluster):
+         → Polls Git every 30 seconds
+         → Sees deployment changed replicas: 1 → 2
+         → Compares Git vs actual cluster state
+         → Detects difference
+         → Automatically applies change
+         → Pods scale up to 2 replicas
+         
+Result: Zero manual intervention! Git = reality in cluster
+```
+
+**Alternative we rejected:**
+- ❌ **Manual kubectl**: Error-prone, no history, "works on my machine" problems
+- ❌ **CI/CD only (Jenkins)**: Jenkins builds images but shouldn't directly deploy (separation of concerns)
+
+#### 7️⃣ **Why Jenkins for CI/CD?**
+
+**What we built:**
+- Jenkins pipelines triggered by Git pushes
+- Automated: Build → Test → Security Scan → Push Image → Update Git
+
+**Why this choice:**
+- ✅ **Industry standard**: Most companies use Jenkins or similar
+- ✅ **Flexibility**: Can customize any step in pipeline
+- ✅ **Plugins**: Trivy for scanning, Checkov for IaC validation
+- ✅ **Security gates**: Block deployment if vulnerabilities found
+
+**Pipeline explained step-by-step:**
+```
+1. Developer pushes code to GitHub
+   
+2. GitHub webhook triggers Jenkins
+
+3. Jenkins Pipeline Runs:
+   
+   Stage 1: Checkout Code
+   ├── Clones Git repository
+   └── Checks out the new commit
+   
+   Stage 2: Build Docker Image
+   ├── Runs: docker build -t auth-api:v1.2.3
+   └── Creates container image with app code
+   
+   Stage 3: Security Scan (Trivy)
+   ├── Scans image for vulnerabilities
+   ├── Checks for outdated packages
+   └── FAILS build if HIGH/CRITICAL issues
+   
+   Stage 4: Push to Registry
+   ├── docker push gcr.io/project/auth-api:v1.2.3
+   └── Image now available for deployment
+   
+   Stage 5: Update Kubernetes Manifest
+   ├── Edits k8s/production-deployment.yaml
+   ├── Changes image: auth-api:v1.2.2 → auth-api:v1.2.3
+   ├── Commits to Git
+   └── Pushes to GitHub
+   
+4. ArgoCD detects Git change → Deploys new version
+```
+
+**Why separate Jenkins and ArgoCD?**
+- Jenkins = Build & Test (CI - Continuous Integration)
+- ArgoCD = Deploy (CD - Continuous Deployment)
+- Separation of concerns: Jenkins shouldn't directly touch production cluster
+
+#### 8️⃣ **Why Prometheus + Grafana for Monitoring?**
+
+**What we built:**
+- Prometheus: Collects metrics every 30 seconds
+- Grafana: Visualizes metrics in dashboards
+- AlertManager: Sends alerts when issues detected
+
+**Why this choice:**
+- ✅ **Industry standard**: Used by Netflix, Uber, GitLab
+- ✅ **Pull-based**: Prometheus scrapes metrics (services don't push)
+- ✅ **Time-series DB**: Perfect for monitoring metrics over time
+- ✅ **Powerful queries**: PromQL language for complex analysis
+- ✅ **Free & open-source**: No licensing costs
+
+**What gets monitored:**
+```
+Node Level:
+- CPU usage per node
+- Memory usage per node
+- Disk I/O
+- Network traffic
+
+Pod Level:
+- Number of running pods
+- Pod restarts (sign of crashes)
+- Container CPU/memory per pod
+- HTTP request rates
+
+Application Level:
+- API response times
+- Error rates (5xx responses)
+- Database connection pool size
+- JWT token validations/sec
+```
+
+**How it works:**
+```
+1. Prometheus scrapes metrics from:
+   ├── Kubernetes API (cluster metrics)
+   ├── Node Exporter (node metrics)
+   ├── cAdvisor (container metrics)
+   └── Application endpoints (/metrics)
+   
+2. Stores in time-series database
+
+3. Grafana queries Prometheus:
+   - Displays in pretty graphs
+   - Shows trends over time
+   - Alerts if thresholds exceeded
+   
+Example Query:
+"Show me auth-api memory usage last 24 hours"
+→ Grafana sends: container_memory_usage_bytes{pod="auth-api"}
+→ Prometheus returns: data points
+→ Grafana draws: graph showing memory trend
+```
+
+#### 9️⃣ **Why ELK Stack for Logging?**
+
+**What we built:**
+- Elasticsearch: Stores logs
+- Kibana: Search and visualize logs
+- Filebeat: Collects logs from nodes
+
+**Why this choice:**
+- ✅ **Centralized logging**: All pod logs in one place
+- ✅ **Powerful search**: Find specific errors across all services
+- ✅ **Troubleshooting**: See what happened before crash
+- ✅ **Compliance**: Audit trail for financial transactions
+
+**Problem it solves:**
+```
+Without ELK:
+- 90 pods running across 3 nodes
+- Bug in production: "Transaction failed for user X"
+- How to find logs?
+  1. SSH to node 1 → check logs → not here
+  2. SSH to node 2 → check logs → not here
+  3. SSH to node 3 → found it! But pod restarted, logs gone 😢
+  
+With ELK:
+- Open Kibana in browser
+- Search: "Transaction failed for user X"
+- Instantly see: logs from all pods, all times
+- Click log → see full context (before/after)
+- Even if pod deleted, logs still in Elasticsearch
+```
+
+**Log flow:**
+```
+Application Pod (auth-api)
+  ↓ console.log("User logged in: user123")
+  
+Node's /var/log/pods/auth-api.log
+  ↓
+  
+Filebeat (DaemonSet on each node)
+  ↓ Reads log files every few seconds
+  
+Elasticsearch
+  ↓ Indexes and stores
+  
+Kibana
+  ↓ Search interface
+  
+You: Search for "user123" → Find log in 1 second!
+```
+
+#### 🔟 **Why Kyverno for Policy Enforcement?**
+
+**What we built:**
+- Policies that run on every pod created
+- Blocks pods that don't meet security standards
+
+**Why this choice:**
+- ✅ **Prevents mistakes**: Can't accidentally deploy insecure pod
+- ✅ **Compliance**: Enforce company/regulatory standards
+- ✅ **Automated**: No manual reviews needed
+- ✅ **Kubernetes-native**: Works seamlessly with Kubernetes
+
+**Example policies:**
+```
+Policy 1: Require Resource Limits
+❌ Blocked: Pod without memory/CPU limits
+   → Could crash node by using all resources
+✅ Allowed: Pod with limits set
+   → Can only use max 512Mi RAM, 500m CPU
+
+Policy 2: No Privileged Containers
+❌ Blocked: Pod running as root
+   → Could break out of container, access host
+✅ Allowed: Pod running as non-root user (UID 1000)
+   → Contained, can't escape
+
+Policy 3: Trusted Image Sources
+❌ Blocked: Pod using image from unknown-registry.com
+   → Could contain malware
+✅ Allowed: Pod using gcr.io/our-project/auth-api
+   → Our verified image
+```
+
+**How it works:**
+```
+Developer: kubectl apply -f bad-pod.yaml
+
+Kubernetes receives request
+  ↓
+Kyverno intercepts (admission controller)
+  ↓
+Checks pod against all policies:
+  ├── Resource limits? ❌ MISSING
+  ├── Non-root user? ✅ PASS
+  └── Trusted image? ✅ PASS
+  
+Result: REQUEST DENIED
+Error: "Pod must specify resource limits"
+
+Developer fixes bad-pod.yaml → tries again → ✅ ALLOWED
+```
+
+---
+
+## �🏗️ Architecture
 
 ### High-Level System Design
 
@@ -110,6 +543,313 @@ Supporting Infrastructure:
 - Metrics: Prometheus + Grafana
 - Logging: Elasticsearch 7.17 + Kibana 7.17 + Filebeat
 - Alerts: Configured in Grafana
+
+---
+
+## 🔗 How Everything Connects: The Complete Flow
+
+### Understanding Nodes, Pods, and Services
+
+**Think of it like an apartment building:**
+- **Node** = The building (physical infrastructure)
+- **Pod** = An apartment (runs your application)
+- **Service** = The building's address/doorbell (how to find apartments)
+- **Ingress** = The lobby directory (routes visitors to right apartment)
+
+### The Physical to Logical Hierarchy
+
+```
+1. PHYSICAL LAYER (Google's Hardware)
+   └── us-central1 region
+       ├── Zone A data center
+       │   └── Physical server running VM
+       │       └── Node 1: gke-digitalbank-gke-node-abc123
+       │
+       ├── Zone B data center
+       │   └── Physical server running VM
+       │       └── Node 2: gke-digitalbank-gke-node-def456
+       │
+       └── Zone C data center
+           └── Physical server running VM
+               └── Node 3: gke-digitalbank-gke-node-ghi789
+
+2. KUBERNETES LAYER (Software Abstraction)
+   └── Cluster: digitalbank-gke
+       └── Nodes (VMs that run containers)
+           └── Pods (containers running your code)
+               └── Containers (Docker images)
+
+3. APPLICATION LAYER (Your Code)
+   └── Microservices
+       ├── auth-api (authenticates users)
+       ├── accounts-api (manages accounts)
+       └── transactions-api (processes payments)
+```
+
+### Example: What Happens When You Access the Website
+
+**Step-by-step flow:**
+
+```
+1. USER ACTION
+   User types: http://34.31.22.16
+   Browser sends HTTP request
+   
+2. GOOGLE CLOUD LOAD BALANCER
+   IP 34.31.22.16 (public internet)
+   ├── Receives request from internet
+   ├── DDoS protection kicks in
+   ├── Health check: Is Ingress pod healthy? ✅
+   └── Forwards to: Nginx Ingress Controller pod
+   
+3. NGINX INGRESS CONTROLLER (Pod in Cluster)
+   IP: 10.1.5.23 (pod IP, internal only)
+   ├── Checks URL path: "/"
+   ├── Matches rule: "/" → digitalbank-frontend service
+   └── Forwards to: frontend service (10.2.194.118)
+   
+4. KUBERNETES SERVICE (Virtual IP)
+   frontend service (ClusterIP: 10.2.194.118)
+   ├── Type: ClusterIP (internal load balancer)
+   ├── Selector: app=digitalbank-frontend
+   ├── Finds pods with that label
+   ├── Picks healthy pod (round-robin)
+   └── Forwards to: frontend pod (10.1.7.45:80)
+   
+5. FRONTEND POD (Container)
+   Pod: digitalbank-frontend-abc123
+   ├── IP: 10.1.7.45 (assigned by Kubernetes)
+   ├── Running on: Node 2 (10.0.0.15)
+   ├── Container: nginx serving React build
+   ├── Reads files from container filesystem
+   └── Returns: HTML, CSS, JavaScript files
+   
+6. RESPONSE TRAVELS BACK
+   Frontend Pod → Service → Ingress → Load Balancer → User
+   User's browser displays the website!
+```
+
+**Now user logs in:**
+
+```
+1. USER SUBMITS LOGIN FORM
+   POST http://34.31.22.16/api/auth/login
+   Body: { "email": "user@example.com", "password": "pass123" }
+   
+2. LOAD BALANCER → INGRESS
+   Same as before (34.31.22.16 → Nginx Ingress)
+   
+3. INGRESS CHECKS PATH
+   Path: /api/auth/login
+   ├── Matches rule: /api/auth(/|$)(.*)
+   ├── Rewrite rule: Remove /api/auth prefix
+   └── Forward to: auth-api service
+   
+4. AUTH-API SERVICE
+   Service: auth-api (ClusterIP: 10.2.171.160:3001)
+   └── Selects: auth-api pod (10.1.3.14)
+   
+5. AUTH-API POD PROCESSES REQUEST
+   Pod: auth-api-5dfdf8556b-2czrq
+   ├── Running: Node.js + Express application
+   ├── Needs database connection
+   ├── Environment variable: DB_HOST=10.121.0.2 (Cloud SQL private IP)
+   └── Connects to: PostgreSQL database
+   
+6. DATABASE CONNECTION (CLOUD SQL)
+   ├── Pod IP: 10.1.3.14 (in VPC)
+   ├── Database IP: 10.121.0.2 (private, in same VPC)
+   ├── Connection: Through VPC peering (no internet!)
+   ├── Query: SELECT * FROM users WHERE email = 'user@example.com'
+   └── Returns: User record with hashed password
+   
+7. AUTH-API POD CONTINUES
+   ├── Compares password hash: bcrypt.compare(...)
+   ├── Password matches! ✅
+   ├── Generates JWT token: jwt.sign({ userId: 123 }, secret)
+   └── Returns: { token: "eyJhbGc...", userId: 123 }
+   
+8. RESPONSE TRAVELS BACK
+   Auth Pod → Service → Ingress → LB → User
+   Frontend stores token in localStorage
+```
+
+**Now user creates bank account:**
+
+```
+1. USER SUBMITS CREATE ACCOUNT
+   POST http://34.31.22.16/api/accounts
+   Headers: { "Authorization": "Bearer eyJhbGc..." }
+   Body: { "account_type": "savings", "currency": "USD" }
+   
+2. INGRESS ROUTES TO ACCOUNTS-API
+   Path: /api/accounts
+   → accounts-api service (10.2.xxx.xxx)
+   → accounts-api pod (10.1.8.22)
+   
+3. ACCOUNTS-API VERIFIES TOKEN
+   Pod: accounts-api-7c8d9f6g5h-xyz789
+   ├── Extracts token from Authorization header
+   ├── Needs to verify with Auth service (microservice communication!)
+   ├── Makes internal request: http://auth-api:3001/api/auth/verify
+   │   └── Kubernetes DNS resolves "auth-api" → 10.2.171.160
+   │   └── Routed to auth-api pod
+   │   └── Auth API verifies token, returns userId
+   └── Token valid! ✅
+   
+4. ACCOUNTS-API CREATES ACCOUNT
+   ├── Now knows userId from token
+   ├── Connects to accountsdb (10.121.0.3)
+   ├── INSERT INTO accounts (user_id, type, currency, balance)
+   │   VALUES (123, 'savings', 'USD', 0.00)
+   ├── Database returns: account_id = 456
+   └── Returns: { account_id: 456, balance: 0.00 }
+```
+
+### How Pods Talk to Each Other (Service Discovery)
+
+**Problem:** Pod IPs change when pods restart!
+- auth-api pod crashes → Kubernetes starts new pod → NEW IP!
+- How does accounts-api find the new auth-api pod?
+
+**Solution:** Kubernetes Services (stable virtual IPs)
+
+```
+Scenario: Accounts-API needs to verify token with Auth-API
+
+Wrong Way (brittle):
+accounts-api → http://10.1.3.14:3001/verify
+                     ↑
+                     Pod IP changes when pod restarts!
+
+Right Way (using Services):
+accounts-api → http://auth-api:3001/verify
+                     ↑
+                     Service name (DNS)
+                     
+Kubernetes DNS resolves:
+auth-api → 10.2.171.160 (Service ClusterIP - stable!)
+           
+Service selects healthy pod:
+10.2.171.160 → 10.1.3.14 (current pod IP)
+
+If pod restarts with new IP 10.1.9.99:
+Service automatically updates → now forwards to 10.1.9.99
+accounts-api code unchanged! Still uses "auth-api:3001"
+```
+
+### How Pods Connect to Databases (VPC Peering)
+
+**The networking challenge:**
+- Pods in GKE: 10.1.0.0/16 (managed by Google Kubernetes)
+- Cloud SQL: 10.121.0.0/16 (managed by Google Cloud SQL)
+- Different networks! How do they talk?
+
+**Solution:** VPC Peering via Service Networking
+
+```
+Setup (done by Terraform):
+1. Reserve IP range: 10.121.0.0/16 for Cloud SQL
+2. Create service connection: VPC ↔ servicenetworking.googleapis.com
+3. Cloud SQL instances get IPs: 10.121.0.2, 10.121.0.3, 10.121.0.4
+
+Result: Both networks connected!
+digitalbank-vpc (10.0.0.0/8 supernet)
+├── GKE Subnet: 10.0.0.0/24 (nodes)
+├── GKE Pods: 10.1.0.0/16
+├── GKE Services: 10.2.0.0/16
+└── Cloud SQL: 10.121.0.0/16 (peered)
+
+Pod can reach database:
+auth-api pod (10.1.3.14) → ping 10.121.0.2 → SUCCESS!
+Traffic stays in Google's private network (fast + secure)
+```
+
+### Why Nodes Are Private (No Public IPs)
+
+**What we configured:**
+```hcl
+private_cluster_config {
+  enable_private_nodes = true   # Nodes get only private IPs
+}
+```
+
+**IP assignments:**
+```
+Node 1:
+├── Public IP: NONE ❌
+└── Private IP: 10.0.0.12 ✅
+    └── Can be reached by: Other nodes in VPC
+    └── Cannot be reached by: Internet
+
+But wait! How does node install packages from internet?
+```
+
+**Enter Cloud NAT:**
+```
+Node needs to: apt-get install package
+
+Without NAT:
+Node (10.0.0.12) → tries to reach ubuntu.com
+                → No public IP, request fails ❌
+                
+With Cloud NAT:
+Node (10.0.0.12) → Cloud NAT (acts as proxy)
+                 → Cloud NAT has public IP
+                 → NAT requests package from ubuntu.com
+                 → NAT returns package to node ✅
+                 
+Outbound: Works (through NAT)
+Inbound: Blocked (no public IP to attack)
+```
+
+### The Complete Request Flow Diagram
+
+```
+EXTERNAL REQUEST FLOW:
+====================
+Internet User (anywhere in world)
+    ↓
+Google Cloud Load Balancer (34.31.22.16)
+    ├── DDoS protection
+    ├── SSL termination (if HTTPS)
+    └── Health checks
+    ↓
+Nginx Ingress Controller Pod (10.1.5.23)
+    ├── Running on: Node 1 or 2 or 3 (Kubernetes schedules it)
+    ├── URL pattern matching
+    └── Request routing
+    ↓
+Kubernetes Service (ClusterIP: 10.2.x.x)
+    ├── Virtual IP (doesn't exist on any node)
+    ├── iptables rules on nodes
+    └── Load balancing to pods
+    ↓
+Application Pod (10.1.x.x)
+    ├── Running on: Specific node
+    ├── Container runtime: Docker
+    └── App code: Node.js/React
+    ↓
+Database (10.121.0.x)
+    ├── Cloud SQL (managed PostgreSQL)
+    ├── VPC peering connection
+    └── Private IP only (secure)
+
+INTERNAL REQUEST FLOW:
+=====================
+accounts-api pod → auth-api pod
+    ↓
+Use Kubernetes Service DNS:
+http://auth-api:3001/verify
+    ↓
+Kubernetes DNS resolves:
+auth-api → 10.2.171.160
+    ↓
+Service forwards to pod:
+10.2.171.160 → 10.1.3.14
+    ↓
+Pod processes request
+```
 
 ---
 
