@@ -18,7 +18,7 @@ metadata:
     app: auth-api
     tier: backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: auth-api
@@ -90,7 +90,7 @@ metadata:
     app: accounts-api
     tier: backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: accounts-api
@@ -162,7 +162,7 @@ metadata:
     app: transactions-api
     tier: backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: transactions-api
@@ -236,7 +236,7 @@ metadata:
     app: digitalbank-frontend
     tier: frontend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: digitalbank-frontend
