@@ -4,11 +4,15 @@
 
 | Metric | Count |
 |--------|-------|
-| **Total Nodes** | 9 |
-| **Total Running Pods** | 183 |
+| **Cluster Name** | digitalbank-gke |
+| **Region** | us-central1 |
+| **Zones** | us-central1-a, us-central1-b, us-central1-c |
+| **Total Nodes** | 9 (3 per zone) |
+| **Total Running Pods** | 180+ |
 | **Total Containers** | ~220+ |
 | **Average Pods/Node** | ~20 |
 | **Node Type** | e2-standard-2 (2 vCPU, 8GB RAM) |
+| **Kubernetes Version** | v1.33.5-gke.2100000 |
 
 ---
 

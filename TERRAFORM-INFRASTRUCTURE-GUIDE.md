@@ -5,7 +5,10 @@
 **Current Infrastructure State:**
 - **GCP Project**: charged-thought-485008-q7
 - **Region**: us-central1
-- **Total Resources**: 32 Terraform-managed resources
+- **Cluster**: digitalbank-gke
+- **Total Nodes**: 9 (3 per zone across 3 availability zones)
+- **Total Resources**: 35 Terraform-managed resources
+- **Terraform Backend**: GCS bucket (charged-thought-485008-q7-tfstate)
 - **Monthly Cost**: ~$383/month (optimized for demo)
 
 ---

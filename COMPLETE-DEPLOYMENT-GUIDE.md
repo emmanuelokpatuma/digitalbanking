@@ -13,11 +13,12 @@
 
 ### Infrastructure Overview
 - **GKE Cluster**: digitalbank-gke (us-central1, 3 zones)
-- **Nodes**: 3 nodes (e2-standard-2: 2 vCPU, 8GB RAM each)
+- **Nodes**: 9 nodes (3 per zone, e2-standard-2: 2 vCPU, 8GB RAM each)
 - **Application Pods**: 4 pods (1 replica per service)
-- **Total Pods**: ~90 pods (including monitoring stack)
+- **Total Pods**: ~180+ pods (including monitoring stack)
 - **Databases**: 3 Cloud SQL PostgreSQL 15 (ZONAL availability)
 - **Monthly Cost**: ~$383/month (optimized for demo/testing)
+- **Autoscaling**: Enabled (min: 3 nodes per zone, max: 10 nodes per zone)
 
 ### Live Service URLs
 
