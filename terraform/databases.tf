@@ -7,7 +7,7 @@ resource "google_sql_database_instance" "auth_db" {
 
   settings {
     tier              = var.database_tier
-    availability_type = "REGIONAL"
+    availability_type = "ZONAL"
     disk_type         = "PD_SSD"
     disk_size         = 100
     disk_autoresize   = true
@@ -23,9 +23,13 @@ resource "google_sql_database_instance" "auth_db" {
     }
 
     ip_configuration {
-      ipv4_enabled    = false
+      ipv4_enabled    = true
       private_network = google_compute_network.vpc.id
-      ssl_mode        = "ENCRYPTED_ONLY"
+      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      
+      authorized_networks {
+        value = "84.69.239.90/32"
+      }
     }
 
     maintenance_window {
@@ -73,7 +77,7 @@ resource "google_sql_database_instance" "accounts_db" {
 
   settings {
     tier              = var.database_tier
-    availability_type = "REGIONAL"
+    availability_type = "ZONAL"
     disk_type         = "PD_SSD"
     disk_size         = 100
     disk_autoresize   = true
@@ -89,9 +93,13 @@ resource "google_sql_database_instance" "accounts_db" {
     }
 
     ip_configuration {
-      ipv4_enabled    = false
+      ipv4_enabled    = true
       private_network = google_compute_network.vpc.id
-      ssl_mode        = "ENCRYPTED_ONLY"
+      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      
+      authorized_networks {
+        value = "84.69.239.90/32"
+      }
     }
 
     maintenance_window {
@@ -139,7 +147,7 @@ resource "google_sql_database_instance" "transactions_db" {
 
   settings {
     tier              = var.database_tier
-    availability_type = "REGIONAL"
+    availability_type = "ZONAL"
     disk_type         = "PD_SSD"
     disk_size         = 100
     disk_autoresize   = true
@@ -155,9 +163,13 @@ resource "google_sql_database_instance" "transactions_db" {
     }
 
     ip_configuration {
-      ipv4_enabled    = false
+      ipv4_enabled    = true
       private_network = google_compute_network.vpc.id
-      ssl_mode        = "ENCRYPTED_ONLY"
+      ssl_mode        = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      
+      authorized_networks {
+        value = "84.69.239.90/32"
+      }
     }
 
     maintenance_window {
