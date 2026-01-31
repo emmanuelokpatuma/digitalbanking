@@ -1,0 +1,721 @@
+# Terraform Infrastructure Architecture - Digital Banking Platform
+
+**Date**: January 31, 2026  
+**Project**: charged-thought-485008-q7  
+**Region**: us-central1  
+**Environment**: Production
+
+---
+
+## High-Level Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        GOOGLE CLOUD PLATFORM                                     │
+│                        Project: charged-thought-485008-q7                        │
+│                        Region: us-central1                                       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      │
+                    ┌─────────────────▼──────────────────┐
+                    │                                     │
+                    │   VPC Network: digitalbank-vpc     │
+                    │   Auto-create subnets: false       │
+                    │                                     │
+                    └─────────────────┬──────────────────┘
+                                      │
+            ┌─────────────────────────┼─────────────────────────┐
+            │                         │                         │
+┌───────────▼───────────┐  ┌──────────▼────────┐  ┌────────────▼────────────┐
+│                       │  │                    │  │                         │
+│ Primary Subnet        │  │ Pods Range         │  │ Services Range          │
+│ 10.0.0.0/24          │  │ 10.1.0.0/16       │  │ 10.2.0.0/16            │
+│ (256 IPs)            │  │ Secondary Range    │  │ Secondary Range         │
+│                       │  │ (65,536 IPs)      │  │ (65,536 IPs)           │
+│ • GKE Nodes          │  │ • Pod IPs          │  │ • Service IPs          │
+│ • Cloud SQL Private  │  │                    │  │ • ClusterIPs           │
+│                       │  │                    │  │ • LoadBalancer IPs     │
+└───────┬───────────────┘  └────────────────────┘  └─────────────────────────┘
+        │
+        │  Private IP Google Access: Enabled
+        │
+┌───────▼─────────────────────────────────────────────────────────────────────────┐
+│                                                                                   │
+│                     FIREWALL RULES (Network Security)                            │
+│                                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │ Rule 1: digitalbank-vpc-allow-internal                                   │    │
+│  │ ─────────────────────────────────────────────────────────────────────────│    │
+│  │ Source Ranges: 10.0.0.0/24, 10.1.0.0/16, 10.2.0.0/16                   │    │
+│  │ Allow: TCP (all ports), UDP (all ports), ICMP                           │    │
+│  │ Purpose: Internal cluster communication                                  │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │ Rule 2: digitalbank-vpc-allow-health-check                               │    │
+│  │ ─────────────────────────────────────────────────────────────────────────│    │
+│  │ Source Ranges: 35.191.0.0/16, 130.211.0.0/22 (Google LB Health Checks) │    │
+│  │ Allow: TCP (all ports)                                                   │    │
+│  │ Target Tags: gke-node                                                    │    │
+│  │ Purpose: Allow GCP load balancer health checks                          │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                   │
+└───────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                     CLOUD NAT & ROUTER (Outbound Internet)                     │
+│                                                                                 │
+│  ┌─────────────────────────────────┐      ┌────────────────────────────────┐  │
+│  │  Cloud Router                   │──────│  Cloud NAT                     │  │
+│  │  Name: digitalbank-vpc-router   │      │  Name: digitalbank-vpc-nat     │  │
+│  │  Region: us-central1            │      │  NAT IP: AUTO_ONLY             │  │
+│  │                                  │      │  Scope: All Subnetworks        │  │
+│  │  Purpose: Routes NAT traffic    │      │  Logging: Errors Only          │  │
+│  └─────────────────────────────────┘      └────────────────────────────────┘  │
+│                                                                                 │
+│  Purpose: Allow private GKE nodes to access internet for updates/pulls        │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                        GKE CLUSTER (Kubernetes Engine)                         │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │  Cluster: digitalbank-gke                                                │  │
+│  │  ──────────────────────────────────────────────────────────────────────  │  │
+│  │  Type: Regional (us-central1)                                           │  │
+│  │  Zones: us-central1-a, us-central1-b, us-central1-f                    │  │
+│  │  Network: digitalbank-vpc                                                │  │
+│  │  Subnetwork: digitalbank-subnet                                          │  │
+│  │  Networking Mode: VPC_NATIVE                                             │  │
+│  │                                                                           │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐    │  │
+│  │  │  IP Allocation Policy                                           │    │  │
+│  │  │  ────────────────────────────────────────────────────────────  │    │  │
+│  │  │  Cluster (Pods):    10.1.0.0/16  (secondary range: "pods")    │    │  │
+│  │  │  Services:          10.2.0.0/16  (secondary range: "services") │    │  │
+│  │  └────────────────────────────────────────────────────────────────┘    │  │
+│  │                                                                           │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐    │  │
+│  │  │  Private Cluster Configuration                                  │    │  │
+│  │  │  ────────────────────────────────────────────────────────────  │    │  │
+│  │  │  Private Nodes: true                                            │    │  │
+│  │  │  Private Endpoint: false (public access to API)                │    │  │
+│  │  │  Master CIDR: 172.16.0.0/28 (16 IPs for control plane)        │    │  │
+│  │  └────────────────────────────────────────────────────────────────┘    │  │
+│  │                                                                           │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐    │  │
+│  │  │  Master Authorized Networks                                     │    │  │
+│  │  │  ────────────────────────────────────────────────────────────  │    │  │
+│  │  │  CIDR: 0.0.0.0/0 (All - for demo/dev)                         │    │  │
+│  │  │  Display Name: "All"                                            │    │  │
+│  │  └────────────────────────────────────────────────────────────────┘    │  │
+│  │                                                                           │  │
+│  │  Features:                                                               │  │
+│  │  ✓ Workload Identity (${project}.svc.id.goog)                           │  │
+│  │  ✓ HTTP Load Balancing                                                  │  │
+│  │  ✓ Horizontal Pod Autoscaling                                           │  │
+│  │  ✓ Network Policy (Calico)                                              │  │
+│  │  ✓ GCP Filestore CSI Driver                                             │  │
+│  │  ✓ Logging: logging.googleapis.com/kubernetes                           │  │
+│  │  ✓ Monitoring: monitoring.googleapis.com/kubernetes                     │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │  Node Pool: digitalbank-gke-node-pool                                   │  │
+│  │  ──────────────────────────────────────────────────────────────────────  │  │
+│  │  Type: Regional (spans all zones)                                       │  │
+│  │  Machine Type: e2-standard-2 (2 vCPU, 8 GB RAM)                        │  │
+│  │  Disk: 100 GB per node                                                  │  │
+│  │  Current Nodes: 9 (3 per zone)                                          │  │
+│  │                                                                           │  │
+│  │  Autoscaling:                                                            │  │
+│  │    Min: 3 nodes per zone (9 total)                                      │  │
+│  │    Max: 10 nodes per zone (30 total)                                    │  │
+│  │                                                                           │  │
+│  │  Management:                                                             │  │
+│  │    Auto-repair: true                                                     │  │
+│  │    Auto-upgrade: true                                                    │  │
+│  │                                                                           │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                     │  │
+│  │  │ Zone: -a    │  │ Zone: -b    │  │ Zone: -f    │                     │  │
+│  │  │ 3 nodes     │  │ 3 nodes     │  │ 3 nodes     │                     │  │
+│  │  │ 56 pods     │  │ 60 pods     │  │ 63 pods     │                     │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                     │  │
+│  │                                                                           │  │
+│  │  Total: 9 nodes, 179 running pods                                       │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                     CLOUD SQL DATABASES (Managed PostgreSQL)                   │
+│                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────────────┐   │
+│  │  VPC Peering for Private Connection                                    │   │
+│  │  ─────────────────────────────────────────────────────────────────────  │   │
+│  │  Global Address: private-ip-address                                    │   │
+│  │  Purpose: VPC_PEERING                                                   │   │
+│  │  Address Type: INTERNAL                                                 │   │
+│  │  Prefix Length: /16                                                     │   │
+│  │  Network: digitalbank-vpc                                               │   │
+│  │  Service: servicenetworking.googleapis.com                             │   │
+│  └────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────────┐ │
+│  │  Database 1: Auth DB                                                      │ │
+│  │  ──────────────────────────────────────────────────────────────────────  │ │
+│  │  Instance Name: digitalbank-auth-db                                      │ │
+│  │  Version: POSTGRES_15                                                    │ │
+│  │  Tier: db-custom-2-7680 (2 vCPU, 7.5 GB RAM)                           │ │
+│  │  Disk: 100 GB SSD (auto-resize enabled)                                 │ │
+│  │  Availability: ZONAL                                                     │ │
+│  │  Region: us-central1                                                     │ │
+│  │                                                                           │ │
+│  │  Database: authdb                                                        │ │
+│  │  User: authuser                                                          │ │
+│  │  Password: Random 32 chars (stored in Secret Manager)                   │ │
+│  │                                                                           │ │
+│  │  Features:                                                               │ │
+│  │  ✓ Automated backups (02:00 daily)                                      │ │
+│  │  ✓ Point-in-time recovery (7 days transaction logs)                    │ │
+│  │  ✓ 30-day backup retention                                              │ │
+│  │  ✓ Private VPC connection                                               │ │
+│  │  ✓ Public IP with authorized network (84.69.239.90/32)                 │ │
+│  │  ✓ SSL: Allow encrypted & unencrypted                                   │ │
+│  │  ✓ Max connections: 200                                                 │ │
+│  │  ✓ Query insights enabled                                               │ │
+│  │  ✓ Deletion protection: true                                            │ │
+│  └──────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────────┐ │
+│  │  Database 2: Accounts DB                                                  │ │
+│  │  ──────────────────────────────────────────────────────────────────────  │ │
+│  │  Instance Name: digitalbank-accounts-db                                  │ │
+│  │  Version: POSTGRES_15                                                    │ │
+│  │  Tier: db-custom-2-7680 (2 vCPU, 7.5 GB RAM)                           │ │
+│  │  Disk: 100 GB SSD (auto-resize enabled)                                 │ │
+│  │  Availability: ZONAL                                                     │ │
+│  │  Region: us-central1                                                     │ │
+│  │                                                                           │ │
+│  │  Database: accountsdb                                                    │ │
+│  │  User: accountsuser                                                      │ │
+│  │  Password: Random 32 chars (stored in Secret Manager)                   │ │
+│  │                                                                           │ │
+│  │  Features:                                                               │ │
+│  │  ✓ Automated backups (02:30 daily)                                      │ │
+│  │  ✓ Point-in-time recovery (7 days transaction logs)                    │ │
+│  │  ✓ 30-day backup retention                                              │ │
+│  │  ✓ Private VPC connection                                               │ │
+│  │  ✓ Public IP with authorized network (84.69.239.90/32)                 │ │
+│  │  ✓ SSL: Allow encrypted & unencrypted                                   │ │
+│  │  ✓ Max connections: 200                                                 │ │
+│  │  ✓ Query insights enabled                                               │ │
+│  │  ✓ Deletion protection: true                                            │ │
+│  └──────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────────┐ │
+│  │  Database 3: Transactions DB                                              │ │
+│  │  ──────────────────────────────────────────────────────────────────────  │ │
+│  │  Instance Name: digitalbank-transactions-db                              │ │
+│  │  Version: POSTGRES_15                                                    │ │
+│  │  Tier: db-custom-2-7680 (2 vCPU, 7.5 GB RAM)                           │ │
+│  │  Disk: 100 GB SSD (auto-resize enabled)                                 │ │
+│  │  Availability: ZONAL                                                     │ │
+│  │  Region: us-central1                                                     │ │
+│  │                                                                           │ │
+│  │  Database: transactionsdb                                                │ │
+│  │  User: transactionsuser                                                  │ │
+│  │  Password: Random 32 chars (stored in Secret Manager)                   │ │
+│  │                                                                           │ │
+│  │  Features:                                                               │ │
+│  │  ✓ Automated backups (03:00 daily)                                      │ │
+│  │  ✓ Point-in-time recovery (7 days transaction logs)                    │ │
+│  │  ✓ 30-day backup retention                                              │ │
+│  │  ✓ Private VPC connection                                               │ │
+│  │  ✓ Public IP with authorized network (84.69.239.90/32)                 │ │
+│  │  ✓ SSL: Allow encrypted & unencrypted                                   │ │
+│  │  ✓ Max connections: 200                                                 │ │
+│  │  ✓ Query insights enabled                                               │ │
+│  │  ✓ Deletion protection: true                                            │ │
+│  └──────────────────────────────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                     SECRET MANAGER (Password Storage)                          │
+│                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────┐           │
+│  │  Secret: auth-db-password                                       │           │
+│  │  Replication: Auto (all regions)                                │           │
+│  │  Value: Random 32-character password                            │           │
+│  └────────────────────────────────────────────────────────────────┘           │
+│                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────┐           │
+│  │  Secret: accounts-db-password                                   │           │
+│  │  Replication: Auto (all regions)                                │           │
+│  │  Value: Random 32-character password                            │           │
+│  └────────────────────────────────────────────────────────────────┘           │
+│                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────┐           │
+│  │  Secret: transactions-db-password                               │           │
+│  │  Replication: Auto (all regions)                                │           │
+│  │  Value: Random 32-character password                            │           │
+│  └────────────────────────────────────────────────────────────────┘           │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Detailed Resource Relationship Diagram
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          RESOURCE DEPENDENCIES                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+google_compute_network.vpc (digitalbank-vpc)
+    │
+    ├──> google_compute_subnetwork.subnet (digitalbank-subnet)
+    │       │
+    │       ├──> Primary Range: 10.0.0.0/24
+    │       ├──> Secondary Range "pods": 10.1.0.0/16
+    │       └──> Secondary Range "services": 10.2.0.0/16
+    │
+    ├──> google_compute_router.router (digitalbank-vpc-router)
+    │       │
+    │       └──> google_compute_router_nat.nat (digitalbank-vpc-nat)
+    │
+    ├──> google_compute_firewall.allow_internal
+    │       │
+    │       └──> Allows: TCP/UDP/ICMP from internal ranges
+    │
+    ├──> google_compute_firewall.allow_health_check
+    │       │
+    │       └──> Allows: TCP from GCP load balancer ranges
+    │
+    ├──> google_compute_global_address.private_ip_address
+    │       │
+    │       └──> google_service_networking_connection.private_vpc_connection
+    │               │
+    │               ├──> google_sql_database_instance.auth_db
+    │               │       ├──> google_sql_database.auth_database
+    │               │       ├──> google_sql_user.auth_user
+    │               │       │       └──> random_password.auth_db_password
+    │               │       │               └──> google_secret_manager_secret.auth_db_password
+    │               │       │                       └──> google_secret_manager_secret_version.auth_db_password
+    │               │       │
+    │               │       └──> Uses: Private VPC Connection
+    │               │
+    │               ├──> google_sql_database_instance.accounts_db
+    │               │       ├──> google_sql_database.accounts_database
+    │               │       ├──> google_sql_user.accounts_user
+    │               │       │       └──> random_password.accounts_db_password
+    │               │       │               └──> google_secret_manager_secret.accounts_db_password
+    │               │       │                       └──> google_secret_manager_secret_version.accounts_db_password
+    │               │       │
+    │               │       └──> Uses: Private VPC Connection
+    │               │
+    │               └──> google_sql_database_instance.transactions_db
+    │                       ├──> google_sql_database.transactions_database
+    │                       ├──> google_sql_user.transactions_user
+    │                       │       └──> random_password.transactions_db_password
+    │                       │               └──> google_secret_manager_secret.transactions_db_password
+    │                       │                       └──> google_secret_manager_secret_version.transactions_db_password
+    │                       │
+    │                       └──> Uses: Private VPC Connection
+    │
+    └──> google_container_cluster.primary (digitalbank-gke)
+            │
+            ├──> Uses: google_compute_network.vpc
+            ├──> Uses: google_compute_subnetwork.subnet
+            ├──> Uses Secondary Ranges: "pods" and "services"
+            │
+            └──> google_container_node_pool.primary_nodes
+                    │
+                    ├──> Machine Type: e2-standard-2
+                    ├──> Nodes: 9 (3 per zone)
+                    ├──> Autoscaling: 3-10 per zone
+                    └──> Connected to all 3 databases via private VPC
+```
+
+---
+
+## IP Address Allocation Table
+
+| Resource | CIDR / IP Range | Total IPs | Purpose |
+|----------|-----------------|-----------|---------|
+| **Primary Subnet** | 10.0.0.0/24 | 256 | GKE node IPs, Cloud SQL private IPs |
+| **Pods Secondary Range** | 10.1.0.0/16 | 65,536 | Kubernetes pod IP addresses |
+| **Services Secondary Range** | 10.2.0.0/16 | 65,536 | Kubernetes service ClusterIP addresses |
+| **GKE Master** | 172.16.0.0/28 | 16 | GKE control plane (private) |
+| **Private VPC Peering** | Auto-allocated /16 | 65,536 | Cloud SQL instances |
+
+---
+
+## Network Flow Diagram
+
+```
+                                 INTERNET
+                                     │
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │   Cloud NAT (Outbound Only)     │
+                    │   digitalbank-vpc-nat            │
+                    └────────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │   Cloud Router                  │
+                    │   digitalbank-vpc-router        │
+                    └────────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │   VPC Network                   │
+                    │   digitalbank-vpc               │
+                    └────────────────┬────────────────┘
+                                     │
+        ┌────────────────────────────┼────────────────────────────┐
+        │                            │                            │
+        │                            │                            │
+┌───────▼────────┐         ┌────────▼─────────┐       ┌─────────▼────────┐
+│  Firewall      │         │   Subnet         │       │  VPC Peering     │
+│  Rules         │         │   10.0.0.0/24   │       │  for Cloud SQL   │
+│                │         │                  │       │                  │
+│ • allow-       │         │  ┌────────────┐  │       │  ┌────────────┐  │
+│   internal     │◄────────┼──│ GKE Nodes  │  │       │  │ Auth DB    │  │
+│                │         │  │ (9 nodes)  │  │       │  │            │  │
+│ • allow-health │         │  │            │  │       │  │ Private IP │  │
+│   check        │         │  │ Private:   │◄─┼───────┼──│            │  │
+│                │         │  │ 10.0.0.x   │  │       │  └────────────┘  │
+└────────────────┘         │  │            │  │       │                  │
+                           │  │ Pods:      │  │       │  ┌────────────┐  │
+        ┌──────────────────┼──│ 10.1.x.x   │  │       │  │Accounts DB │  │
+        │                  │  │            │  │       │  │            │  │
+        │  Load Balancers  │  │ Services:  │  │       │  │ Private IP │◄─┼──┐
+        │  (External IPs)  │  │ 10.2.x.x   │  │       │  │            │  │  │
+        │                  │  │            │  │       │  └────────────┘  │  │
+        │  34.31.22.16 ◄───┼──┤            │  │       │                  │  │
+        │  136.111.5.250   │  │            │  │       │  ┌────────────┐  │  │
+        │  34.71.18.248    │  │            │  │       │  │Transaction │  │  │
+        │  35.188.11.8     │  │            │  │       │  │    DB      │  │  │
+        │  34.29.9.149     │  │            │  │       │  │            │  │  │
+        │  34.63.246.97    │  │            │  │       │  │ Private IP │◄─┼──┘
+        │  34.44.185.11    │  │            │  │       │  │            │  │
+        │  34.173.39.60    │  │            │  │       │  └────────────┘  │
+        └──────────────────┘  └────────────┘  │       │                  │
+                              │                │       │  All DBs connect │
+                              │  Secondary:    │       │  via VPC Peering │
+                              │  Pods          │       │  (Private IPs)   │
+                              │  10.1.0.0/16  │       │                  │
+                              │                │       └──────────────────┘
+                              │  Secondary:    │
+                              │  Services      │
+                              │  10.2.0.0/16  │
+                              │                │
+                              └────────────────┘
+```
+
+---
+
+## Terraform Resource Summary
+
+### Network Resources (6 total)
+
+| Resource Type | Name | Purpose |
+|---------------|------|---------|
+| `google_compute_network` | vpc | VPC network container |
+| `google_compute_subnetwork` | subnet | Primary subnet with secondary ranges |
+| `google_compute_router` | router | NAT routing |
+| `google_compute_router_nat` | nat | Outbound internet for private nodes |
+| `google_compute_firewall` | allow_internal | Internal communication |
+| `google_compute_firewall` | allow_health_check | Load balancer health checks |
+
+### GKE Resources (2 total)
+
+| Resource Type | Name | Purpose |
+|---------------|------|---------|
+| `google_container_cluster` | primary | GKE cluster control plane |
+| `google_container_node_pool` | primary_nodes | Worker nodes |
+
+### Database Resources (15 total)
+
+| Resource Type | Name | Purpose |
+|---------------|------|---------|
+| `google_compute_global_address` | private_ip_address | VPC peering IP range |
+| `google_service_networking_connection` | private_vpc_connection | Private connection for Cloud SQL |
+| `google_sql_database_instance` | auth_db | PostgreSQL instance for auth |
+| `google_sql_database` | auth_database | Database within auth instance |
+| `google_sql_user` | auth_user | Database user for auth |
+| `google_sql_database_instance` | accounts_db | PostgreSQL instance for accounts |
+| `google_sql_database` | accounts_database | Database within accounts instance |
+| `google_sql_user` | accounts_user | Database user for accounts |
+| `google_sql_database_instance` | transactions_db | PostgreSQL instance for transactions |
+| `google_sql_database` | transactions_database | Database within transactions instance |
+| `google_sql_user` | transactions_user | Database user for transactions |
+| `random_password` | auth_db_password | Generated password |
+| `random_password` | accounts_db_password | Generated password |
+| `random_password` | transactions_db_password | Generated password |
+| (Secret Manager) | 6 secrets + versions | Secure password storage |
+
+**Total Terraform Resources: ~29**
+
+---
+
+## Security Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                        SECURITY LAYERS                                │
+└──────────────────────────────────────────────────────────────────────┘
+
+Layer 1: Network Security
+├─ VPC Isolation (digitalbank-vpc)
+├─ Private Subnets (no direct internet)
+├─ Firewall Rules (whitelist only)
+└─ Cloud NAT (outbound only, no inbound)
+
+Layer 2: GKE Security
+├─ Private Nodes (no public IPs)
+├─ Private Endpoint (optional - currently public for dev)
+├─ Master Authorized Networks (0.0.0.0/0 - should restrict in prod)
+├─ Workload Identity (IAM-based pod authentication)
+├─ Network Policies (Calico)
+└─ RBAC (Kubernetes role-based access)
+
+Layer 3: Database Security
+├─ Private VPC Connection (no public internet route)
+├─ Public IP with Authorized Network (84.69.239.90/32 only)
+├─ SSL/TLS Support (encrypted connections)
+├─ Strong Passwords (32 chars, stored in Secret Manager)
+├─ Deletion Protection (enabled)
+└─ Automated Backups (30-day retention)
+
+Layer 4: Secret Management
+├─ Google Secret Manager (encrypted at rest)
+├─ Auto replication (cross-region redundancy)
+├─ IAM-based access control
+└─ No plaintext passwords in code/config
+
+Layer 5: Monitoring & Compliance
+├─ Cloud Logging (all API calls logged)
+├─ Cloud Monitoring (resource metrics)
+├─ Query Insights (database performance)
+├─ Maintenance Windows (automated patching)
+└─ Prometheus + Grafana (application monitoring)
+```
+
+---
+
+## High Availability Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                   HIGH AVAILABILITY DESIGN                            │
+└──────────────────────────────────────────────────────────────────────┘
+
+Region: us-central1
+│
+├─ Zone: us-central1-a
+│  ├─ GKE Nodes: 3
+│  ├─ Pods: 56
+│  └─ Elasticsearch Master 0
+│
+├─ Zone: us-central1-b
+│  ├─ GKE Nodes: 3
+│  ├─ Pods: 60
+│  ├─ Elasticsearch Master 1
+│  └─ Cloud SQL Primary (regional within zone)
+│
+└─ Zone: us-central1-f
+   ├─ GKE Nodes: 3
+   ├─ Pods: 63
+   └─ Elasticsearch Master 2
+
+Features:
+✓ Multi-zone GKE cluster (survives zone failure)
+✓ Regional node pool (auto-redistributes on failure)
+✓ StatefulSets (Elasticsearch) spread across zones
+✓ Load balancers (auto-failover)
+✓ Cloud SQL backups (30-day retention, PITR)
+✓ Auto-repair (unhealthy nodes replaced)
+✓ Auto-upgrade (managed updates)
+```
+
+---
+
+## Cost Breakdown Estimate
+
+| Resource | Qty | Type | Monthly Cost (USD)* |
+|----------|-----|------|---------------------|
+| **GKE Cluster** | 1 | Control Plane | ~$73 |
+| **GKE Nodes** | 9 | e2-standard-2 | ~$250 |
+| **Cloud SQL - Auth** | 1 | db-custom-2-7680 | ~$120 |
+| **Cloud SQL - Accounts** | 1 | db-custom-2-7680 | ~$120 |
+| **Cloud SQL - Transactions** | 1 | db-custom-2-7680 | ~$120 |
+| **Cloud NAT** | 1 | NAT Gateway | ~$45 |
+| **Load Balancers** | 8 | External LB | ~$150 |
+| **Storage** | ~1TB | PD-SSD | ~$170 |
+| **Networking** | - | Egress | ~$50 |
+| **Logging/Monitoring** | - | Cloud Operations | ~$50 |
+| **Secret Manager** | 3 | Secrets | ~$1 |
+| | | **TOTAL** | **~$1,149/month** |
+
+*Estimates based on us-central1 pricing, January 2026
+
+---
+
+## Application Data Flow
+
+```
+User Request → Internet
+     │
+     ▼
+External Load Balancer (34.31.22.16)
+     │
+     ├─> NGINX Ingress Controller (1 pod)
+     │
+     ├──> /api/auth/* ──> Auth API Pod (10.1.x.x)
+     │                      │
+     │                      └──> Auth DB (private VPC peering)
+     │                            PostgreSQL: authdb
+     │
+     ├──> /api/accounts/* ──> Accounts API Pod (10.1.x.x)
+     │                          │
+     │                          └──> Accounts DB (private VPC peering)
+     │                                PostgreSQL: accountsdb
+     │
+     ├──> /api/transactions/* ──> Transactions API Pod (10.1.x.x)
+     │                              │
+     │                              └──> Transactions DB (private VPC peering)
+     │                                    PostgreSQL: transactionsdb
+     │
+     └──> / ──> Frontend Pod (10.1.x.x)
+                  │
+                  └──> Serves static React app
+                        (calls APIs via browser)
+
+Logs collected by:
+  - Filebeat (on all nodes) → Elasticsearch → Kibana
+  - Fluentbit (GKE) → Cloud Logging
+
+Metrics collected by:
+  - Prometheus Node Exporters → Prometheus → Grafana
+  - GKE Metrics Agent → Cloud Monitoring
+```
+
+---
+
+## Terraform Module Structure
+
+```
+terraform/
+│
+├── main.tf                    # Provider and backend configuration
+├── variables.tf               # Input variable definitions
+├── outputs.tf                 # Output values
+├── terraform.tfvars           # Variable values (gitignored)
+│
+├── network.tf                 # Network resources
+│   ├── VPC
+│   ├── Subnet (with secondary ranges)
+│   ├── Cloud Router
+│   ├── Cloud NAT
+│   └── Firewall Rules
+│
+├── gke.tf                     # Kubernetes resources
+│   ├── GKE Cluster
+│   └── Node Pool
+│
+└── databases.tf               # Database resources
+    ├── VPC Peering Setup
+    ├── Cloud SQL Instances (×3)
+    ├── Databases (×3)
+    ├── Users (×3)
+    ├── Passwords (×3)
+    └── Secret Manager (×3)
+```
+
+---
+
+## Key Configuration Values
+
+### Network Configuration
+```hcl
+network_name              = "digitalbank-vpc"
+subnet_name               = "digitalbank-subnet"
+subnet_cidr               = "10.0.0.0/24"      # 256 IPs
+pods_cidr                 = "10.1.0.0/16"      # 65,536 IPs
+services_cidr             = "10.2.0.0/16"      # 65,536 IPs
+master_ipv4_cidr_block    = "172.16.0.0/28"    # 16 IPs
+```
+
+### GKE Configuration
+```hcl
+cluster_name    = "digitalbank-gke"
+region          = "us-central1"
+machine_type    = "e2-standard-2"
+node_count      = 3                # per zone
+min_node_count  = 3                # per zone
+max_node_count  = 10               # per zone
+disk_size_gb    = 100
+```
+
+### Database Configuration
+```hcl
+database_version = "POSTGRES_15"
+database_tier    = "db-custom-2-7680"    # 2 vCPU, 7.5 GB RAM
+disk_size        = 100                    # GB SSD
+```
+
+---
+
+## Next Steps & Recommendations
+
+### 🔒 Security Improvements
+1. **Restrict Master Authorized Networks**
+   - Change from `0.0.0.0/0` to specific IPs/VPN range
+   
+2. **Enable Private Endpoint**
+   - Set `enable_private_endpoint = true` for production
+
+3. **Remove Public Database IPs**
+   - Use only private VPC connection
+   - Remove authorized network for `84.69.239.90/32`
+
+4. **Enable Binary Authorization**
+   - Only deploy signed/verified container images
+
+### 📊 High Availability Improvements
+1. **Upgrade Cloud SQL to Regional**
+   - Change `availability_type = "REGIONAL"` for automatic failover
+
+2. **Add Read Replicas**
+   - Reduce load on primary databases
+
+3. **Implement Multi-region**
+   - Deploy to additional region for disaster recovery
+
+### 💰 Cost Optimization
+1. **Right-size Nodes**
+   - Monitor actual usage and adjust machine types
+
+2. **Use Committed Use Discounts**
+   - 1-year or 3-year commitments for 37-57% savings
+
+3. **Implement Autoscaling**
+   - Scale down during low-traffic periods
+
+4. **Review Database Tiers**
+   - Consider smaller instances for dev/staging
+
+---
+
+**Document Version**: 1.0  
+**Last Updated**: January 31, 2026  
+**Maintained By**: DevOps Team
+
+For more information:
+- [CLUSTER-INVENTORY.md](CLUSTER-INVENTORY.md) - Cluster resource details
+- [SERVICE-ACCESS-URLS.md](SERVICE-ACCESS-URLS.md) - Access endpoints
+- [UNDERSTANDING-CLUSTER-PODS.md](UNDERSTANDING-CLUSTER-PODS.md) - Pod architecture
