@@ -70,6 +70,18 @@
 
 ---
 
+### Why Not Store All Passwords in One Secret?
+- **Google Secret Manager** is designed for fine-grained access control and auditability.
+- Each secret (auth-db, accounts-db, transactions-db) is created separately so:
+  - You can grant access to only the specific secret needed by each service (least privilege).
+  - You can rotate/change one password without affecting others.
+  - Audit logs clearly show which secret was accessed or modified.
+- Storing all passwords in a single secret would:
+  - Make access control less granular (all-or-nothing).
+  - Increase risk if one service is compromised.
+  - Complicate password rotation and management.
+- **Best practice:** One secret per credential for security, compliance, and operational simplicity.
+
 ### Why 3 Secret Manager Resources?
 - **google_secret_manager_secret** and **google_secret_manager_secret_version** are created for each database password:
   - 1 for auth-db password
