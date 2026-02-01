@@ -46,7 +46,7 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                git url: 'https://github.com/yourusername/digitalbanking.git', branch: "${params.BRANCH}"  // Update with your actual repo
+                git url: 'https://github.com/emmanuelokpatuma/digitalbanking.git', branch: "${params.BRANCH}"  // Updated to your actual repo
                 script {
                     sh 'git rev-parse --short HEAD > .git/commit-id'
                     env.GIT_COMMIT_SHORT = readFile('.git/commit-id').trim()
